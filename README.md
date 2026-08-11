@@ -1,4 +1,4 @@
-# Regression Lab
+# Regression Lab — Agent Observability & Evaluation Platform
 
 面向 Coding Agent 的本地可观测与评测平台。它把一次 Agent 修复任务收敛为可复现的 Trial：在隔离 Worktree 中执行、记录 JSONL Trace、运行确定性评测器，并将多版本 Agent 的结果汇总为可审计实验。
 
@@ -52,11 +52,15 @@ make manifest-check
 
 Gate 总览将 48 条真实 Trial 的版本结论、可靠性与成本变化放在同一屏。
 
-![Promotion Gate overview](assets/console-release-overview.jpg)
+![Promotion Gate overview](assets/console-gate-overview-v011.png)
 
-同一 Case 的两版本与三次 Trial 并列；失败可直接钻取 Trace、工具调用与 Diff。
+Case Explorer 将同一任务的三次 Trial 按 v1/v2 并列为柱状对比，并汇总通过率、Token 与工具调用。
 
-![Paired Case inspection](assets/console-paired-case.jpg)
+![Paired Case inspection](assets/console-case-comparison-v011.png)
+
+选中任一 Trial 后，Trace Inspector 展示真实模型调用、已解析工具名称和 Git Diff，用于定位一次评测结论的完整证据链。
+
+![Trace and Git Diff inspection](assets/console-trace-inspector-v011.png)
 
 ### 启动观察控制台
 
@@ -67,7 +71,7 @@ cd study/Regression
 make console
 ```
 
-打开 `http://127.0.0.1:8765`。控制台只读取已有 Artifact，不会执行 Agent、写入数据库或暴露模型密钥。
+打开 `http://127.0.0.1:8767`。控制台只读取已有 Artifact，不会执行 Agent、写入数据库或暴露模型密钥。
 
 ### 接入真实 Agent
 
@@ -117,4 +121,4 @@ docs/           契约、设计决策、实验报告与演示材料
 `.github/workflows/verify.yml` 会运行离线单测、Docker 集成测试和所有 Manifest 校验；不会调用真实模型或要求密钥。由于本项目目前位于 `study/Regression` 子目录，若发布到 GitHub，应将该目录作为**独立仓库根目录**推送，这样工作流才能被 GitHub Actions 识别。
 
 演示顺序见 [Demo Script](docs/DEMO_SCRIPT.md)，简历与面试表述见 [Resume Notes](docs/RESUME.md)。
-独立发布前按 [Release Checklist](docs/RELEASE_CHECKLIST.md) 检查；本次 v0.1.0 审计见 [Release Audit](docs/RELEASE_AUDIT.md)；仓库简介、截图说明和视频文案见 [GitHub Release Assets](docs/GITHUB_RELEASE_ASSETS.md)。
+独立发布前按 [Release Checklist](docs/RELEASE_CHECKLIST.md) 检查；当前稳定版本的审计见 [Release Audit](docs/RELEASE_AUDIT.md)；仓库简介、截图说明和视频文案见 [GitHub Release Assets](docs/GITHUB_RELEASE_ASSETS.md)。

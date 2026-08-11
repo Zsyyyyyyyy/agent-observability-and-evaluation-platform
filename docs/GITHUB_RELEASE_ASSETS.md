@@ -21,8 +21,9 @@ isolated worktree → Docker sandbox → JSONL trace → deterministic evaluator
 
 | 文件 | 用途 | 建议配文 |
 |---|---|---|
-| `assets/console-release-overview.jpg` | README 首屏 / 项目总览 | Gate 直接给出候选版本晋级结论，并汇总 48 条真实 Trial。 |
-| `assets/console-paired-case.jpg` | README 实验结果部分 / 演示视频封面 | 同一 Case 的 v1/v2 三次 Trial 并列，预算超限与模型失败可直接定位。 |
+| `assets/console-gate-overview-v011.png` | README 首屏 / 项目总览 | Gate 直接给出候选版本晋级结论，并汇总 48 条真实 Trial。 |
+| `assets/console-case-comparison-v011.png` | README 实验结果部分 | 同一 Case 的 v1/v2 三次 Trial 按指标并列展示，可一眼观察延迟、Token 与工具调用的变化。 |
+| `assets/console-trace-inspector-v011.png` | README Trace 说明 / 演示收尾 | 展示真实模型调用、解析后的工具名称和 Git Diff，说明评测结论可回溯。 |
 
 ## GitHub Topics
 

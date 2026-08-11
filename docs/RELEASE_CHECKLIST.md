@@ -20,7 +20,7 @@
 ## 仓库首页最低内容
 
 - [ ] 一句话定位：面向 Coding Agent 的可观测、评测与版本晋级平台。
-- [ ] 两张 Console 截图：Gate 总览、Case 并列对比。
+- [ ] 三张 Console 截图：Gate 总览、Case 并列对比、Trial Trace 与 Git Diff。
 - [ ] 架构图和 Quick Start。
 - [ ] 真实数据：8 Case × 3 Trial × 2 Versions；v1 22/24、v2 23/24。
 - [ ] 诚实限制：本地单机 MVP、模型超时率持平、成功样本成本仍有权衡。
