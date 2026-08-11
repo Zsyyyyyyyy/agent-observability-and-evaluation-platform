@@ -21,9 +21,9 @@ function deltaClass(n, lowerIsBetter = true) { return n === 0 ? "flat" : (lowerI
 async function load() {
   let dashboard, trials, experiment, gate;
   try { [dashboard, trials, experiment, gate] = await Promise.all([api('/api/dashboard'), api('/api/trials'), api('/api/experiments/latest'), api('/api/gate/latest')]); }
-  catch { dashboard={runtime_root:"Demo fallback · start serve_dashboard.py for artifacts",trial_count:0}; trials=[]; experiment={}; gate={}; document.querySelector('#connection').textContent='● API UNAVAILABLE'; }
+  catch { dashboard={runtime_label:"Demo fallback · start serve_dashboard.py for artifacts",trial_count:0}; trials=[]; experiment={}; gate={}; document.querySelector('#connection').textContent='● API UNAVAILABLE'; }
   state = { ...state, trials, experiment, gate, versions: versionLabels(experiment, trials) };
-  document.querySelector('#runtime-root').textContent = dashboard.runtime_root;
+  document.querySelector('#runtime-root').textContent = dashboard.runtime_label || 'Local experiment artifacts';
   renderDecision(dashboard); renderMatrix(); renderTriage();
   const firstCase = caseIds()[0];
   if (state.selectedCase && caseIds().includes(state.selectedCase)) renderCaseDetail(state.selectedCase, false);

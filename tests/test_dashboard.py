@@ -17,8 +17,11 @@ class DashboardRepositoryTests(unittest.TestCase):
             (archived / "result.json").write_text(json.dumps({**result, "status": "trace_incomplete"}), encoding="utf-8")
             repo = DashboardRepository(root)
 
-            self.assertEqual(repo.dashboard()["pass_rate"], 1.0)
-            self.assertEqual(repo.dashboard()["trace_incomplete_count"], 0)
+            dashboard = repo.dashboard()
+            self.assertEqual(dashboard["pass_rate"], 1.0)
+            self.assertEqual(dashboard["trace_incomplete_count"], 0)
+            self.assertEqual(dashboard["runtime_label"], f"Local experiment artifacts · {root.name}")
+            self.assertNotIn(str(root), dashboard["runtime_label"])
             self.assertEqual(repo.trials()[0]["case_id"], "case")
             self.assertEqual(repo.trials()[0]["id"], "baseline/case")
             self.assertEqual(repo.trial("baseline/case")["trace"][0]["name"], "agent.stop")

@@ -74,7 +74,8 @@ class DashboardRepository:
         rows = self.trials()
         count = len(rows) or 1
         return {
-            "runtime_root": str(self.runtime_root), "trial_count": len(rows),
+            "runtime_label": f"Local experiment artifacts · {self.runtime_root.name}",
+            "trial_count": len(rows),
             "passed_count": sum(bool(row["passed"]) for row in rows),
             "pass_rate": sum(bool(row["passed"]) for row in rows) / count if rows else 0.0,
             "model_failed_count": sum(row["status"] == "model_failed" for row in rows),
