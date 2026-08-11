@@ -71,7 +71,7 @@ cd study/Regression
 make console
 ```
 
-打开 `http://127.0.0.1:8767`。控制台只读取已有 Artifact，不会执行 Agent、写入数据库或暴露模型密钥。
+打开 `http://127.0.0.1:8765`。控制台只读取已有 Artifact，不会执行 Agent、写入数据库或暴露模型密钥。
 
 ### 接入真实 Agent
 
