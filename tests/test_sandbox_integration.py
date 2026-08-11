@@ -18,7 +18,9 @@ class DockerSandboxIntegrationTests(unittest.TestCase):
         cls.worktree = TemporaryDirectory()
         cls.sandbox = DockerSandbox(
             cls.worktree.name,
-            SandboxConfig(timeout_seconds=2),
+            # Container startup on a hosted runner can take a few seconds.
+            # Individual timeout behavior is asserted with an explicit limit below.
+            SandboxConfig(timeout_seconds=10),
         )
 
     @classmethod
@@ -50,7 +52,10 @@ class DockerSandboxIntegrationTests(unittest.TestCase):
         self.assertEqual(root_result.status, "command_failed")
 
     def test_command_timeout_is_enforced_by_runner(self):
-        result = self.sandbox.run("python -c 'import time; time.sleep(5)'")
+        result = self.sandbox.run(
+            "python -c 'import time; time.sleep(5)'",
+            timeout_seconds=2,
+        )
 
         self.assertEqual(result.status, "timed_out")
         self.assertEqual(result.exit_code, -1)
