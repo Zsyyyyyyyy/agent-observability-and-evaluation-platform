@@ -35,14 +35,19 @@ class DockerSandboxIntegrationTests(unittest.TestCase):
         self.assertIn(result.status, {"command_failed", "timed_out"})
 
     def test_read_only_root_and_tmpfs_policy(self):
-        result = self.sandbox.run(
+        tmp_result = self.sandbox.run(
             "python -c \"from pathlib import Path; "
-            "Path('/tmp/sandbox-ok').write_text('ok'); print('tmp-ok'); "
+            "Path('/tmp/sandbox-ok').write_text('ok'); print('tmp-ok', flush=True)\""
+        )
+        self.assertEqual(tmp_result.exit_code, 0)
+        self.assertIn("tmp-ok", tmp_result.stdout)
+
+        root_result = self.sandbox.run(
+            "python -c \"from pathlib import Path; "
             "Path('/etc/regression-lab-should-fail').write_text('blocked')\""
         )
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("tmp-ok", result.stdout)
+        self.assertNotEqual(root_result.exit_code, 0)
+        self.assertEqual(root_result.status, "command_failed")
 
     def test_command_timeout_is_enforced_by_runner(self):
         result = self.sandbox.run("python -c 'import time; time.sleep(5)'")
