@@ -1,0 +1,503 @@
+.comparison-row:hover,
+.comparison-row.selected {
+  background: #e6eee7;
+  color: var(--ink);
+}
+
+.comparison-row.selected {
+  box-shadow: inset 4px 0 0 var(--signal);
+}
+
+.case-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  background: #edf1ed;
+}
+
+.case-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.case-picker select {
+  min-width: 220px;
+  background: var(--sheet);
+  color: var(--ink);
+}
+
+.metric-tabs {
+  display: flex;
+  gap: 0;
+}
+
+.metric-tabs button {
+  margin-left: -1px;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.metric-tabs button:first-child {
+  margin-left: 0;
+}
+
+.metric-tabs button[aria-selected="true"],
+.metric-tabs button.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: white;
+}
+
+.case-chart {
+  padding: 20px 20px 12px;
+}
+
+.chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 20px;
+}
+
+.chart-caption {
+  margin: 0;
+  color: var(--muted);
+  font: 10px/1.5 var(--mono);
+}
+
+.chart-unit {
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.bar-chart {
+  display: grid;
+  grid-template-columns: repeat(var(--groups), 1fr);
+  align-items: end;
+  gap: 14px;
+  height: 245px;
+  margin-top: 18px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--ink);
+}
+
+.chart-group {
+  display: flex;
+  flex-direction: column;
+  justify-content: end;
+  height: 100%;
+  min-width: 0;
+}
+
+.chart-bars {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: 7px;
+  height: 210px;
+  border-bottom: 1px solid #d6ddd8;
+  background: repeating-linear-gradient(to top, transparent 0, transparent 51px, #d6ddd8 52px);
+}
+
+.chart-bar-wrap {
+  display: flex;
+  flex: 0 1 52px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: end;
+  height: 100%;
+  min-width: 0;
+}
+
+.chart-value {
+  overflow: hidden;
+  max-width: 74px;
+  min-height: 14px;
+  color: var(--muted);
+  font: 9px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-bar {
+  position: relative;
+  width: min(42px, 100%);
+  height: var(--bar-height);
+  min-height: 3px;
+  background: var(--ink);
+  transition: height .25s ease;
+}
+
+.chart-bar span {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  color: white;
+  font: 9px var(--mono);
+  opacity: .9;
+  transform: translateX(-50%);
+}
+
+.baseline-bar,
+.baseline-swatch {
+  background: #68799d;
+}
+
+.candidate-bar,
+.candidate-swatch {
+  background: var(--signal);
+}
+
+.failed-bar {
+  background: repeating-linear-gradient(135deg, #b2b9b5 0, #b2b9b5 5px, #7e8882 5px, #7e8882 8px);
+}
+
+.missing-bar {
+  height: 3px;
+  background: #cbd2cd;
+  border: 1px dashed var(--muted);
+}
+
+.trial-label {
+  padding-top: 8px;
+  color: var(--muted);
+  font: 10px var(--mono);
+  text-align: center;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding-top: 12px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.chart-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chart-legend small {
+  flex: 1 1 100%;
+  color: var(--muted);
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
+
+.case-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.summary-version,
+.summary-delta {
+  min-height: 108px;
+  padding: 16px 20px;
+}
+
+.summary-version + .summary-version,
+.summary-delta {
+  border-left: 1px solid var(--line);
+}
+
+.summary-version strong,
+.summary-delta strong {
+  display: block;
+  font-size: 25px;
+  letter-spacing: -.06em;
+}
+
+.summary-version span,
+.summary-delta span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.baseline-summary .eyebrow {
+  color: #586c98;
+}
+
+.candidate-summary .eyebrow {
+  color: var(--ok);
+}
+
+.summary-delta strong {
+  color: var(--muted);
+}
+
+.summary-delta.positive strong {
+  color: var(--ok);
+}
+
+.summary-delta.negative strong {
+  color: var(--signal);
+}
+
+.paired-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px 8px;
+}
+
+.paired-heading span {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.detail-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 44px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Keep long patches and tool output inside their own grid track. Without
+   minmax(0, ...) a single long diff line can force the right column outside
+   the Inspector panel. */
+.detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.detail-grid > section,
+.diff-section,
+.trace-list,
+.diff {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.trace-list {
+  overflow-x: hidden;
+}
+
+.diff {
+  overflow-x: auto;
+  overflow-y: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.detail-section-head h3 {
+  margin: 0;
+  padding: 14px 20px;
+}
+
+.section-hint {
+  padding-right: 20px;
+  color: var(--muted);
+  font: 9px var(--mono);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.trace-event {
+  align-items: flex-start;
+}
+
+.trace-event.tool-event {
+  background: #f0f4ef;
+}
+
+.trace-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.trace-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.trace-meta {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.trace-preview {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-summary {
+  padding: 12px 20px;
+  border-bottom: 1px solid #d6ddd8;
+  background: #edf1ed;
+}
+
+.diff-summary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 13px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.diff-summary-metrics b {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.diff-summary-metrics .diff-add b {
+  color: var(--ok);
+}
+
+.diff-summary-metrics .diff-remove b {
+  color: var(--signal);
+}
+
+.diff-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.diff-files span {
+  padding: 4px 6px;
+  background: #e0e7e1;
+  color: var(--ink);
+  font: 9px var(--mono);
+}
+
+.diff-line {
+  display: block;
+  min-height: 1.55em;
+  padding: 0 7px;
+}
+
+.diff-line.diff-add {
+  background: #dcefe1;
+  color: #12623e;
+}
+
+.diff-line.diff-remove {
+  background: #fbe2db;
+  color: #9e321d;
+}
+
+.diff-line.diff-hunk {
+  background: #e5e8f2;
+  color: #586c98;
+}
+
+.diff-line.diff-file {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 880px) {
+  .detail-section-head {
+    min-height: 42px;
+  }
+}
+
+@media (max-width: 640px) {
+  .detail-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .detail-section-head h3 {
+    padding-bottom: 5px;
+  }
+
+  .section-hint {
+    padding: 0 20px 10px;
+  }
+}
+
+@media (max-width: 880px) {
+  .case-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .metric-tabs {
+    width: 100%;
+  }
+
+  .metric-tabs button {
+    flex: 1;
+  }
+
+  .case-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-version + .summary-version,
+  .summary-delta {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .case-picker {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .case-picker select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .bar-chart {
+    gap: 5px;
+    padding: 0;
+  }
+
+  .chart-bars {
+    gap: 3px;
+  }
+
+  .chart-bar {
+    width: min(32px, 100%);
+  }
+
+  .chart-value {
+    max-width: 48px;
+    font-size: 8px;
+  }
+
+  .paired-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 5px;
+  }
+}

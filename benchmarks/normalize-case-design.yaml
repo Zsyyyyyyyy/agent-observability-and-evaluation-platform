@@ -1,0 +1,64 @@
+schema_version: 1
+status: ready
+
+id: normalize_none_input
+version: 1
+title: 处理名称标准化的空输入
+description: >-
+  验证 Agent 能否补充输入校验，同时保持已有字符串标准化行为。
+
+fixture:
+  path: fixtures/smoke_normalizer
+  base_commit: fixture-v1
+  language: python
+  test_command: python -m unittest discover -s tests -v
+
+task:
+  prompt: >-
+    请修复名称标准化函数收到 None 时抛出异常的问题。None 应返回空字符串，
+    现有字符串的去空格和小写行为必须保持，只能修改 src/ 目录。
+  expected_behavior:
+    - None 输入返回空字符串。
+    - 普通字符串继续去空格并转换为小写。
+  allowed_paths:
+    - src/**
+  forbidden_paths:
+    - tests/**
+
+execution:
+  timeout_seconds: 180
+  max_tokens: 30000
+  max_tool_calls: 24
+  max_retries: 2
+  trials: 1
+  network: none
+
+tool_policy:
+  allow:
+    - read_file
+    - write_file
+    - edit_file
+    - glob
+    - bash
+  deny:
+    - spawn_teammate
+    - connect_mcp
+    - schedule_cron
+    - create_worktree
+    - remove_worktree
+
+evaluators:
+  required:
+    - test
+    - path_policy
+    - diff
+    - tool_integrity
+    - budget
+    - trace_completeness
+
+acceptance:
+  must:
+    - test_exit_code == 0
+    - forbidden_path_changes == 0
+    - trace_status == complete
+    - result_status == completed

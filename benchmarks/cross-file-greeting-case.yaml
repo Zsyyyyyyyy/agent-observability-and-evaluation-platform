@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: cross_file_greeting_missing_name
+version: 1
+title: 跨文件修复缺失用户名称
+fixture: {path: fixtures/cross_file_greeting, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 welcome：当 user 中缺少 name 时返回 "Hello, Guest!"；已有 name 时保持既有行为。请先理解 src/service.py 和 src/messages.py 的职责，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 16000, max_tool_calls: 16, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

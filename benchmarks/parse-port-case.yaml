@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: parse_port_blank_default
+version: 1
+title: 修复空端口配置
+fixture: {path: fixtures/parse_port, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复端口解析函数：空字符串应返回默认端口 8000，正常数字字符串行为不变。只能修改 src/ 中的实现，不得修改测试。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 12000, max_tool_calls: 12, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

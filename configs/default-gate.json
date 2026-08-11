@@ -1,0 +1,10 @@
+{
+  "min_completion_rate_delta": 0.0,
+  "min_evaluation_pass_rate_delta": 0.0,
+  "max_model_failed_rate_delta": 0.0,
+  "max_trace_incomplete_rate": 0.0,
+  "max_infra_failed_rate": 0.0,
+  "max_avg_duration_ms_delta": 0.0,
+  "max_avg_tool_calls_ratio": 0.1,
+  "max_avg_model_tokens_ratio": 0.1
+}

@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: merge_settings_none
+version: 1
+title: 修复空配置覆盖
+fixture: {path: fixtures/merge_settings, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 merge_settings：overrides 为 None 时应返回默认配置；传入字典时仍要正确覆盖默认值。只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 12000, max_tool_calls: 12, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

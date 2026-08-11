@@ -1,0 +1,94 @@
+schema_version: 1
+status: draft
+
+id: smoke_calculator_empty_input
+version: 1
+title: 修复计算器空输入异常
+description: >-
+  用一个最小 Python Fixture 验证 s20 Adapter、临时 Worktree、工具代理、
+  测试执行、Git Diff、Trace 和 Trial Result 是否能完成端到端闭环。
+
+fixture:
+  path: fixtures/smoke_calculator
+  base_commit: TO_BE_CREATED
+  language: python
+  setup_command: python -m pip install -e .
+  test_command: python -m unittest discover -s tests -v
+
+task:
+  prompt: >-
+    请修复计算器在收到空输入时抛出异常的问题。保持现有非空输入行为不变，
+    只能修改 src/ 目录中的实现代码，完成后运行测试并报告修改内容。
+  expected_behavior:
+    - 空输入返回约定的安全结果，而不是抛出未处理异常。
+    - 原有非空输入测试继续通过。
+  allowed_paths:
+    - src/**
+  forbidden_paths:
+    - tests/**
+    - pyproject.toml
+    - .github/**
+
+execution:
+  timeout_seconds: 180
+  max_tokens: 30000
+  max_tool_calls: 24
+  max_retries: 2
+  trials: 1
+  network: none
+  environment_allowlist:
+    - MODEL_ID
+    - ANTHROPIC_BASE_URL
+
+tool_policy:
+  allow:
+    - read_file
+    - write_file
+    - edit_file
+    - glob
+    - bash
+  deny:
+    - spawn_teammate
+    - connect_mcp
+    - schedule_cron
+    - create_worktree
+    - remove_worktree
+    - keep_worktree
+  bash:
+    execution: docker_sandbox
+    allowed_commands:
+      - python -m unittest discover -s tests -v
+      - python -m compileall src
+      - git diff --check
+
+artifacts:
+  required:
+    - run_manifest.json
+    - trace.jsonl
+    - stdout.txt
+    - stderr.txt
+    - git.diff
+    - test-report.txt
+    - result.json
+
+evaluators:
+  required:
+    - test
+    - path_policy
+    - diff
+    - tool_integrity
+    - budget
+    - trace_completeness
+
+acceptance:
+  must:
+    - test_exit_code == 0
+    - forbidden_path_changes == 0
+    - trace_status == complete
+    - result_status == completed
+  evidence:
+    - Phoenix trace link
+    - Git diff artifact
+    - Test output artifact
+    - Tool call summary
+
