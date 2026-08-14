@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: config_inheritance_precedence
+version: 1
+title: 修复多层配置继承与覆盖顺序
+fixture: {path: fixtures/config_inheritance, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 resolve_settings：配置可以通过 extends 多层继承，父级设置先合并、子级同名设置覆盖；未知父级必须报错而不能悄悄忽略。请理解 src/catalog.py 与 src/resolver.py 的职责，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 18000, max_tool_calls: 18, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

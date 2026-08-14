@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: dependency_cycle_detection
+version: 1
+title: 修复依赖图环检测
+fixture: {path: fixtures/dependency_cycle, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 dependency_order：无环图仍返回确定性的依赖优先顺序；发现直接或间接依赖环时，必须抛出 src.errors.DependencyCycleError。只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 18000, max_tool_calls: 18, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

@@ -6,7 +6,7 @@ Experiment 在同一组 Benchmark Case 上比较多个 Agent Version。当前入
 python3.11 scripts/run_experiment.py \
   --manifest benchmarks/smoke-case-design.yaml \
   --output-dir .runtime/experiment \
-  --agents baseline:s20-baseline-replay-v1,candidate:s20-candidate-replay-v1 \
+  --agents baseline:readonly-replay-v1,candidate:legacy agent-candidate-replay-v1 \
   --trials 3 \
   --docker --bash
 ```

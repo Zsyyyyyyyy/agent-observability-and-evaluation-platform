@@ -3,7 +3,7 @@
 > 执行周期：14 天（简历可投递版 v0.1）  
 > 工作目录：`study/Regression/`  
 > 交付基线：`docs/DELIVERY_CHECKLIST.md`  
-> 首个被测对象：只读接入 `s20` Coding Agent
+> 首个被测对象：只读接入 `legacy agent` Coding Agent
 
 ## 1. 执行目标
 
@@ -29,7 +29,7 @@ v0.1 的成功标准不是功能数量，而是以下四件事全部成立：
 ## 2. 固定约束
 
 - 所有新增与修改仅发生在 `study/Regression/`。
-- 不修改 `s20` 源码，通过 Adapter 只读接入。
+- 不修改 `legacy agent` 源码，通过 Adapter 只读接入。
 - Agent 编排在宿主机运行，危险工具在 Docker 沙箱中运行。
 - Trace 使用 OpenTelemetry 并发送到 Phoenix。
 - 元数据使用 SQLite，Artifact 使用本地 SHA-256 内容寻址存储。
@@ -41,7 +41,7 @@ v0.1 的成功标准不是功能数量，而是以下四件事全部成立：
 ```text
 Schema 冻结
   ↓
-s20 单 Case 可运行
+legacy agent 单 Case 可运行
   ↓
 Trace + Worktree + Docker 闭环
   ↓
@@ -122,10 +122,10 @@ arlab gate check EXPERIMENT_ID --policy gate.yaml
 
 ## 6. Phase 1：最小风险闭环（Day 2–3）
 
-### 6.1 Day 2：s20 Adapter 与基础 Trace
+### 6.1 Day 2：legacy agent Adapter 与基础 Trace
 
-- [ ] 分析 s20 的模型调用、工具注册、循环和压缩边界。
-- [ ] 设计只读 Adapter，不直接修改 s20 文件。
+- [ ] 分析 legacy agent 的模型调用、工具注册、循环和压缩边界。
+- [ ] 设计只读 Adapter，不直接修改 legacy agent 文件。
 - [ ] 运行一个固定 Prompt。
 - [ ] 创建根 Span `agent.run`。
 - [ ] 包装模型调用为 `model.call` Span。
@@ -137,7 +137,7 @@ arlab gate check EXPERIMENT_ID --policy gate.yaml
 
 - Phoenix 能看到一条父子关系正确的 Trace。
 - Trace 包含模型耗时和至少一次工具调用。
-- s20 文件内容和 Git 状态未被修改。
+- legacy agent 文件内容和 Git 状态未被修改。
 
 ### 6.2 Day 3：单 Case、Worktree 与测试证据
 
@@ -434,7 +434,7 @@ Schema/单元测试
 
 | 风险 | 触发信号 | 降级方案 |
 |---|---|---|
-| s20 难以只读注入 Trace | Day 2 仍无法拦截模型/工具边界 | 在 Adapter 中建立最小兼容执行层，保留 s20 行为和来源说明 |
+| legacy agent 难以只读注入 Trace | Day 2 仍无法拦截模型/工具边界 | 在 Adapter 中建立最小兼容执行层，保留 legacy agent 行为和来源说明 |
 | Phoenix 启动或 OTLP 不稳定 | Day 3 无法稳定展示 Trace | 暂存标准 OTLP/NDJSON，先保证 Trace 模型，随后恢复 Phoenix |
 | Docker Tool Proxy 复杂度过高 | Day 6 无法执行基础工具 | 先支持 Shell/Read/Write/Edit 四类必要工具，删除非关键工具 |
 | Benchmark 制作耗时 | Day 8 少于 8 个有效 Case | 保证 8 个高质量 Case，不追求 10 个 |

@@ -4,7 +4,7 @@
 
 ## 已交付
 
-- [x] Adapter 注册表：`s20-replay` 只读接入示例与 `react-agent` 真实模型参考实现。
+- [x] Adapter 注册表：`readonly-replay` 只读接入示例与 `react-agent` 真实模型参考实现。
 - [x] Manifest 驱动的 Case × Trial × Agent Version 执行入口，支持安全恢复。
 - [x] 每个 Trial 使用独立 Worktree，并收集 Git Diff 与修改文件。
 - [x] Docker Tool Sandbox：默认禁网、只读根文件系统、capability drop、CPU/内存/PID 限制、超时清理。
@@ -16,6 +16,9 @@
 - [x] Baseline/Candidate 实验汇总：完成率、评测通过率、测试通过率、耗时、工具调用、Token 与 Diff。
 - [x] 可执行版本晋级 Gate：正确性、可靠性与带阈值的效率规则，支持机器可读报告和非零退出码阻断。
 - [x] `react-agent-v1/v2` 真实对照：各 8/8 通过；已诚实记录延迟/成本权衡。
+- [x] 外接 Agent `external-openai-v2/v3` 真实演进实验：3 Case × 3 Trial，复用同一 Gate 并写入 Evolution Catalog。
+- [x] Evolution Timeline 能按严格 benchmark fingerprint 标记 v2 → v3 可比，并保留 Gate Decision 与父子版本关系。
+- [x] 阶段 7 统计可信度增强：扩展 v2/v3 至 8 Case × 3 Trial × 2 Version，输出 Case 聚类 Bootstrap 95% 区间、Case 胜负和克制结论。
 - [x] 零依赖本地只读控制台，可查看汇总、Trial、Trace、工具调用、Diff 与实验报告。
 - [x] 一键命令：`make test`、`make docker-test`、`make manifest-check`、`make real-smoke`、`make console`。
 - [x] 独立仓库发布时可用的 GitHub Actions 校验工作流；CI 不使用模型密钥、不发起真实模型调用。
@@ -33,7 +36,6 @@
 
 ## 未交付（刻意不夸大）
 
-- [ ] 代表性 Case 的 3 Trial 重复实验、方差/中位数报告和基于阈值的版本晋级 Gate。
 - [ ] 将当前失败语义扩展为可由 Manifest 驱动的专用失败基准，并纳入 Experiment 对比报告。
 - [ ] 多用户、鉴权、远程队列、云端 Artifact 存储和大规模调度。
 - [ ] 生产级 CI Artifact 上传、JUnit/HTML 报告与远程 Trace 后端。

@@ -31,11 +31,11 @@ class AdapterDescriptor:
 
 REGRESSION_ROOT = Path(__file__).resolve().parents[2]
 _REGISTRY: Mapping[str, AdapterDescriptor] = {
-    "s20-replay": AdapterDescriptor(
-        adapter_id="s20-replay",
-        worker_path=REGRESSION_ROOT / "adapters" / "s20" / "worker.py",
-        default_version="s20-baseline-replay-v1",
-        description="Deterministic s20 replay adapter used to verify the evaluation pipeline.",
+    "readonly-replay": AdapterDescriptor(
+        adapter_id="readonly-replay",
+        worker_path=REGRESSION_ROOT / "adapters" / "readonly_replay" / "worker.py",
+        default_version="readonly-replay-v1",
+        description="Deterministic read-only replay adapter used to verify the evaluation pipeline.",
         capabilities=("read_file", "write_file", "edit_file", "glob", "bash"),
     ),
     "react-agent": AdapterDescriptor(
@@ -51,6 +51,13 @@ _REGISTRY: Mapping[str, AdapterDescriptor] = {
         default_version="failure-probe-v1",
         description="Deterministic fault-injection adapter used only to verify failure handling.",
         capabilities=("read_file", "write_file", "edit_file", "glob", "bash"),
+    ),
+    "external-command": AdapterDescriptor(
+        adapter_id="external-command",
+        worker_path=REGRESSION_ROOT / "adapters" / "external_command" / "worker.py",
+        default_version="external-agent-v1",
+        description="Framework-neutral local Agent command using the JSONL observer contract.",
+        capabilities=("agent.run", "model.call", "tool.call"),
     ),
 }
 

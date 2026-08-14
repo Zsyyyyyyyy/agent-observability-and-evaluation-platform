@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: profile_v1_migration
+version: 1
+title: 修复 Profile v1 到 v2 的兼容迁移
+fixture: {path: fixtures/profile_migration, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 load_profile：v2 保持 display_name，v1 的 name 应迁移为 display_name；返回值统一为 v2，同时默认 settings 不能在不同 profile 间共享。请理解 src/schema.py 与 src/loader.py，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 18000, max_tool_calls: 18, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

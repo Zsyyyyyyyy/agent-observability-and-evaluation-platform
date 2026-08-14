@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: cursor_revision_integrity
+version: 1
+title: 修复带版本游标的分页一致性
+fixture: {path: fixtures/cursor_revision, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 list_page：游标只能用于生成它的 revision；分页不能跳过或重复记录；负数或越界 offset 必须拒绝。保留 cursor.py 提供的编码格式和现有成功路径，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 18000, max_tool_calls: 18, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

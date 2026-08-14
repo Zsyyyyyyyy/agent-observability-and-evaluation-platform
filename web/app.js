@@ -8,7 +8,7 @@ const METRICS = {
   model_tokens: { label: "Model tokens", unit: "tokens", lowerIsBetter: true, format: v => `${Math.round(v).toLocaleString()} tok` },
   tool_calls: { label: "Tool calls", unit: "calls", lowerIsBetter: true, format: v => `${Math.round(v)} calls` },
 };
-let state = { trials: [], experiment: {}, gate: {}, versions: [], selectedCase: null, metric: "duration_ms" };
+let state = { trials: [], experiment: {}, gate: {}, evolution: {}, protocol: {}, policyStop: {}, versions: [], selectedCase: null, metric: "duration_ms" };
 
 function versionLabels(experiment, trials) {
   const agents = experiment?.agents || [];
@@ -19,28 +19,186 @@ function summarize(rows) { const good = rows.filter(r => r.passed && r.trace_val
 function deltaClass(n, lowerIsBetter = true) { return n === 0 ? "flat" : (lowerIsBetter ? n < 0 : n > 0) ? "positive" : "negative"; }
 
 async function load() {
-  let dashboard, trials, experiment, gate;
-  try { [dashboard, trials, experiment, gate] = await Promise.all([api('/api/dashboard'), api('/api/trials'), api('/api/experiments/latest'), api('/api/gate/latest')]); }
-  catch { dashboard={runtime_label:"Demo fallback · start serve_dashboard.py for artifacts",trial_count:0}; trials=[]; experiment={}; gate={}; document.querySelector('#connection').textContent='● API UNAVAILABLE'; }
-  state = { ...state, trials, experiment, gate, versions: versionLabels(experiment, trials) };
-  document.querySelector('#runtime-root').textContent = dashboard.runtime_label || 'Local experiment artifacts';
-  renderDecision(dashboard); renderMatrix(); renderTriage();
-  const firstCase = caseIds()[0];
+  const responses = await Promise.allSettled([
+    api('/api/dashboard'), api('/api/trials'), api('/api/experiments/latest'),
+    api('/api/gate/latest'), api('/api/evolution'), api('/api/protocol'), api('/api/policy-stop'),
+  ]);
+  const value = (index, fallback) => responses[index]?.status === 'fulfilled' ? responses[index].value : fallback;
+  const dashboard = value(0, {trial_count: 0}), trials = value(1, []), experiment = value(2, {}), gate = value(3, {}), evolution = value(4, {}), protocol = value(5, {}), policyStop = value(6, {});
+  const failed = responses.filter(response => response.status === 'rejected');
+  if (failed.length) document.querySelector('#connection').textContent = failed.length === responses.length ? '● API UNAVAILABLE' : '● PARTIAL API';
+  state = { ...state, trials, experiment, gate, evolution, protocol, policyStop, versions: versionLabels(experiment, trials) };
+  renderDecision(dashboard); renderEvidenceDeck(dashboard); renderDecisionSpine(); renderEvolution(); renderProtocol(); renderMatrix(); renderTriage();
+  const firstCase = primaryCaseId() || caseIds()[0];
   if (state.selectedCase && caseIds().includes(state.selectedCase)) renderCaseDetail(state.selectedCase, false);
   else if (firstCase) renderCaseDetail(firstCase, false);
+}
+function renderProtocol() {
+  const content=document.querySelector('#protocol-content'), hint=document.querySelector('#protocol-hint'), p=state.protocol || {};
+  if (!p.available) { hint.textContent='legacy artifact'; content.innerHTML='<p class="empty big">This historical Experiment predates protocol freezing. Its results remain inspectable, but they cannot claim strict comparability.</p>'; return; }
+  const comparability=p.comparability || {}, level=String(comparability.level || 'not_available');
+  hint.textContent=`${level.toUpperCase()} · ${String(p.fingerprint || '').slice(0,18)}…`;
+  const yesNo=value=>value===true?'Docker':'trusted host';
+  content.innerHTML=`<div class="protocol-grid"><div><span>COMPARISON INTENT</span><strong>${esc(p.comparison_intent || 'unrecorded')}</strong></div><div><span>FIXED MODEL</span><strong>${esc(p.model || 'unconfigured')}</strong><small>${esc(p.provider || 'provider unrecorded')}</small></div><div><span>BENCHMARK</span><strong>${esc(String(p.case_count ?? 0))} Cases × ${esc(String(p.trials_per_case ?? '—'))} Trials</strong><small>paired schedule seed ${esc(String(p.schedule_seed ?? '—'))}</small></div><div><span>EXECUTION</span><strong>${esc(yesNo(p.docker))}</strong><small>${esc(p.image || 'no container image')}</small></div></div><div class="protocol-foot"><span>ALLOWED CHANGE</span><b>${esc((p.allowed_differences || []).join(', ') || 'none')}</b><span>PROTOCOL</span><b>${esc(String(p.fingerprint || 'unavailable'))}</b></div>`;
+}
+function renderEvolution() {
+  const content=document.querySelector('#evolution-content'), hint=document.querySelector('#evolution-hint');
+  const evolution=state.evolution || {}, versions=[...(evolution.versions || [])];
+  const experiments=[...(evolution.experiments || [])].sort((a,b)=>String(a.completed_at || a.created_at).localeCompare(String(b.completed_at || b.created_at)));
+  const experiment=experiments.find(item=>item.experiment_id===evolution.current_experiment_id) || experiments.at(-1);
+  const gate=(evolution.gate_decisions || []).find(item=>item.experiment_id===experiment?.experiment_id);
+  if (!evolution.available || !versions.length) {
+    hint.textContent='catalog unavailable';
+    content.innerHTML='<p class="empty big">No version history is attached to this experiment yet. Run an Experiment to create a local Evolution Catalog.</p>';
+    return;
+  }
+  hint.textContent=`${versions.length} versions · ${experiments.length} experiments · ${evolution.catalog_path || 'local catalog'}`;
+  const node=(version,index)=>{const isCandidate=version.version_id===experiment?.candidate_version_id; const isBaseline=version.version_id===experiment?.baseline_version_id; const role=isCandidate?'CANDIDATE':isBaseline?'BASELINE':'HISTORY'; const snapshot=version.snapshot || {}; return `<button type="button" class="evolution-node ${isCandidate?'candidate-node':''}" data-evolution-version="${esc(version.version_id)}" aria-expanded="${isCandidate?'true':'false'}"><span class="evolution-step">${String(index+1).padStart(2,'0')}</span><span class="evolution-marker"></span><span class="evolution-role">${role}</span><strong>${esc(version.version)}</strong><small>${esc(version.change_type)} · ${esc(version.status)}</small><span class="evolution-summary">${esc(version.change_summary)}</span><span class="evolution-meta">${esc(snapshot.adapter_id || 'adapter')} / ${esc(snapshot.prompt_profile || 'default profile')}</span></button>`;};
+  const gateView=gate ? `<aside class="evolution-gate ${gate.status==='promote'?'promote':'hold'}"><span>GATE DECISION</span><strong>${esc(gate.status.toUpperCase())}</strong><small>${esc(gate.policy_version)} · ${esc(String(gate.rules?.length || 0))} rules</small></aside>` : '<aside class="evolution-gate pending"><span>GATE DECISION</span><strong>PENDING</strong><small>Run the promotion Gate to attach a decision.</small></aside>';
+  const metric=(value, kind)=>{const number=Number(value);if(!Number.isFinite(number))return 'N/A';if(kind==='pass')return `${number>0?'+':''}${(number*100).toFixed(1)}pp`;if(kind==='latency')return `${number>0?'+':''}${Math.round(number)}ms`;return `${number>0?'+':''}${Math.round(number)}`;};
+  const comparability=(item)=>{const info=item.comparability || {}, level=info.level || 'none', label={first:'FIRST RECORD',strict:'STRICTLY COMPARABLE',partial:'PARTIALLY COMPARABLE',none:'NOT COMPARABLE'}[level] || 'NOT COMPARABLE', delta=item.comparison_summary?.delta || {}; return `<article class="experiment-ledger-row ${esc(level)} ${item.experiment_id===experiment?.experiment_id?'current':''}"><div class="experiment-ledger-title"><span>${esc(label)}</span><strong>${esc(item.name || 'version comparison')}</strong><small>${esc(info.reason || 'No comparability note.')}</small></div><div class="experiment-ledger-metrics"><span>PASS <b>${esc(metric(delta.evaluation_pass_rate,'pass'))}</b></span><span>LATENCY <b>${esc(metric(delta.avg_duration_ms,'latency'))}</b></span><span>TOKENS <b>${esc(metric(delta.avg_model_tokens,'count'))}</b></span><span>TOOLS <b>${esc(metric(delta.avg_tool_calls,'count'))}</b></span></div></article>`;};
+  content.innerHTML=`<div class="evolution-rail">${versions.map(node).join('')}</div><div class="evolution-context"><div><span>ACTIVE EXPERIMENT</span><strong>${esc(experiment?.name || 'current comparison')}</strong><small>${esc(String(experiment?.case_ids?.length || 0))} Cases · context ${esc(String(experiment?.evaluation_context_hash || '').slice(0,18))}…</small></div>${gateView}</div><section class="experiment-ledger" aria-label="Experiment comparison history"><div class="experiment-ledger-head"><span>EXPERIMENT LEDGER</span><small>Candidate minus baseline · comparable only when the benchmark basis supports a trend claim.</small></div>${experiments.map(comparability).join('')}</section>`;
+  document.querySelectorAll('[data-evolution-version]').forEach(button=>button.addEventListener('click',()=>toggleEvolutionNode(button)));
+}
+function toggleEvolutionNode(button) {
+  document.querySelectorAll('[data-evolution-version]').forEach(node=>node.setAttribute('aria-expanded',String(node===button && node.getAttribute('aria-expanded')!=='true')));
 }
 function renderDecision(dashboard) {
   const c = state.experiment?.comparison, b = c?.baseline, v = c?.candidate, d = c?.delta || {};
   const passed = state.gate?.passed;
-  document.querySelector('#gate-card').innerHTML = `<span class="gate-kicker">PROMOTION GATE</span><strong class="${passed ? 'gate-pass' : 'gate-hold'}">${passed === true ? 'PASS' : passed === false ? 'HOLD' : 'PENDING'}</strong><span>${passed === true ? 'Candidate meets the current release policy.' : 'Load a gate report to decide.'}</span>`;
+  const decisionMessage = state.gate?.decision?.message;
+  document.querySelector('#gate-card').innerHTML = `<span class="gate-kicker">PROMOTION GATE</span><strong class="${passed ? 'gate-pass' : 'gate-hold'}">${passed === true ? 'PASS' : passed === false ? 'HOLD' : 'PENDING'}</strong><span>${esc(decisionMessage || (passed === true ? 'Candidate meets the current release policy.' : 'Load a gate report to decide.'))}</span>`;
   document.querySelector('#trial-count').textContent = dashboard.trial_count || '—';
   document.querySelector('#pass-delta').textContent = c ? signed((d.evaluation_pass_rate * 100).toFixed(1), 'pp') : '—';
-  document.querySelector('#duration-delta').textContent = c ? signed(Math.round(d.avg_duration_ms), 'ms') : '—';
-  document.querySelector('#token-delta').textContent = c ? signed(Math.round(d.avg_model_tokens || 0)) : '—';
-  document.querySelector('#reliability').textContent = b && v ? `${Math.round(b.model_failed_rate*100)}% / ${Math.round(v.model_failed_rate*100)}%` : '—';
+  const statistics = c?.statistics || state.experiment?.statistics || {};
+  const pairedDuration = statistics.metrics?.duration_ms?.point_estimate_mean_delta;
+  const pairedTokens = statistics.metrics?.model_tokens?.point_estimate_mean_delta;
+  document.querySelector('#duration-delta').textContent = Number.isFinite(Number(pairedDuration)) ? signed(Math.round(pairedDuration), 'ms') : '—';
+  document.querySelector('#token-delta').textContent = Number.isFinite(Number(pairedTokens)) ? signed(Math.round(pairedTokens)) : '—';
+  const reliability = c?.reliability || state.experiment?.reliability || {};
+  const allPassDelta = reliability.delta?.all_pass_at_k;
+  document.querySelector('#reliability').textContent = Number.isFinite(Number(allPassDelta)) ? signed((Number(allPassDelta) * 100).toFixed(1), 'pp') : '—';
   const rules = state.gate?.rules || [];
   const fail = state.trials.filter(t => !t.passed); const model = state.trials.filter(t => t.status === 'model_failed');
   document.querySelector('#reliability-content').innerHTML = `<div class="reliability-number"><b>${model.length}</b><span>model failures</span></div><div class="reliability-number"><b>${state.trials.filter(t=>!t.trace_valid).length}</b><span>invalid traces</span></div><div class="rule-list">${rules.length ? rules.map(r=>`<div><span>${esc(r.name.replaceAll('_',' '))}</span><b class="${r.passed?'ok-text':'bad-text'}">${r.passed?'PASS':'BLOCK'}</b></div>`).join('') : `<div><span>${fail.length} trials need review</span></div>`}</div>`;
+  renderAttribution();
+}
+function caseComparisons() { return state.experiment?.comparison?.case_comparisons || state.experiment?.case_comparisons || []; }
+function consistency(item) { return item?.all_pass_at_k ?? item?.pass_at_k; }
+function casePriority(item) {
+  const before = consistency(item?.baseline), after = consistency(item?.candidate);
+  const failedPairs = (item?.paired_trials || []).filter(pair => pair.baseline?.valid_pass !== pair.candidate?.valid_pass).length;
+  const durationMagnitude = Math.max(0, ...(item?.paired_trials || []).map(pair => Math.abs(Number(pair.delta?.duration_ms) || 0)));
+  return (before !== after ? 1000000 : 0) + failedPairs * 100000 + durationMagnitude;
+}
+function primaryCaseId() {
+  return [...caseComparisons()].sort((a,b) => casePriority(b) - casePriority(a))[0]?.case_id || null;
+}
+function renderDecisionSpine() {
+  const gateStatus = state.gate?.decision?.status || (state.gate?.passed === true ? 'promote' : state.gate?.passed === false ? 'blocked' : 'pending');
+  const statistics = state.experiment?.comparison?.statistics || state.experiment?.statistics || {};
+  const conclusion = statistics.conclusion || {};
+  const evidenceStatus = conclusion.level || 'not_available';
+  const eligible = Number(statistics.eligible_case_count || 0), target = 8;
+  const primary = primaryCaseId();
+  const primaryReport = caseComparisons().find(item => item.case_id === primary);
+  const before = consistency(primaryReport?.baseline), after = consistency(primaryReport?.candidate);
+  const evidenceLabel = {limited_coverage:'INCONCLUSIVE',inconclusive:'INCONCLUSIVE',observed_latency_improvement:'OBSERVED',not_available:'NOT AVAILABLE'}[evidenceStatus] || evidenceStatus.replaceAll('_',' ').toUpperCase();
+  const gateTone = gateStatus === 'promote' ? 'positive' : gateStatus === 'pending' ? 'flat' : 'negative';
+  const evidenceTone = ['limited_coverage','inconclusive'].includes(evidenceStatus) ? 'warning' : evidenceStatus === 'observed_latency_improvement' ? 'positive' : 'flat';
+  document.querySelector('#decision-spine-content').innerHTML = `
+    <article class="spine-stop ${gateTone}"><span class="spine-index">01</span><small>POLICY GATE</small><strong>${esc(gateStatus.toUpperCase())}</strong><p>${esc(state.gate?.decision?.message || 'No release decision is attached.')}</p></article>
+    <article class="spine-stop ${evidenceTone}"><span class="spine-index">02</span><small>STATISTICAL EVIDENCE</small><strong>${esc(evidenceLabel)}</strong><p>${esc(conclusion.reason || 'No paired bootstrap conclusion is available.')}</p></article>
+    <article class="spine-stop ${eligible >= target ? 'positive' : 'warning'}"><span class="spine-index">03</span><small>CLAIM COVERAGE</small><strong>${esc(String(eligible))} / ${target} CASES</strong><p>${eligible >= target ? 'Broad performance claim coverage reached.' : `${target - eligible} more eligible Cases are required for a broad claim.`}</p></article>
+    <button class="spine-stop primary-stop ${before === after ? 'flat' : after ? 'positive' : 'negative'}" type="button" ${primary ? `data-primary-case="${esc(primary)}"` : 'disabled'}><span class="spine-index">04</span><small>PRIMARY INVESTIGATION</small><strong>${esc(primary ? primary.replaceAll('_',' ') : 'NO CASE')}</strong><p>${primary ? `${before ? 'all-pass' : 'not all-pass'} → ${after ? 'all-pass' : 'not all-pass'} · open paired evidence` : 'No Case comparison is available.'}</p></button>`;
+  document.querySelector('[data-primary-case]')?.addEventListener('click', event => renderCaseDetail(event.currentTarget.dataset.primaryCase, true));
+}
+function renderAttribution() {
+  const attribution = state.experiment?.comparison?.failure_attribution || state.experiment?.failure_attribution || {};
+  const baseline = attribution.baseline || {}, candidate = attribution.candidate || {};
+  const [base, candidateVersion] = state.versions;
+  const view = (label, key, hint) => {
+    const before = baseline[key]?.valid_pass_rate, after = candidate[key]?.valid_pass_rate;
+    return `<div class="reliability-view"><span>${esc(label)}</span><div><b class="baseline-value">${esc(pct(before))}</b><i>→</i><b class="candidate-value">${esc(pct(after))}</b></div><small>${esc(hint)}</small></div>`;
+  };
+  if (!attribution.baseline) {
+    document.querySelector('#attribution-content').innerHTML = '<p class="attribution-empty">Failure attribution needs an experiment report.</p>';
+    return;
+  }
+  const counts = candidate.counts || {};
+  document.querySelector('#attribution-content').innerHTML = `<div class="attribution-head"><span>RAW / DIAGNOSTIC</span><small>${esc(base || 'baseline')} → ${esc(candidateVersion || 'candidate')}</small></div>${view('Raw reliability', 'raw_reliability', 'Release Gate uses every failed Trial.')}${view('Agent quality', 'agent_quality', `Excludes ${candidate.agent_quality?.excluded_external_failure_count ?? 0} model / infra failures for diagnosis only.`)}<div class="failure-ledger">${['agent','model','infrastructure','evidence','policy'].map(kind=>`<span><b>${esc(String(counts[kind] ?? 0))}</b>${esc(kind)}</span>`).join('')}</div>`;
+}
+function pct(value) { return Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : 'N/A'; }
+function evidencePair(label, before, after, formatter, lowerIsBetter) {
+  const delta = Number.isFinite(Number(before)) && Number.isFinite(Number(after)) ? Number(after) - Number(before) : null;
+  const verdict = delta === null ? 'flat' : deltaClass(delta, lowerIsBetter);
+  const deltaText = delta === null ? 'N/A' : (label.includes('rate') || label.includes('Pass@')) ? `${delta > 0 ? '+' : ''}${(delta * 100).toFixed(1)}pp` : `${delta > 0 ? '+' : ''}${Math.round(delta)}`;
+  return `<div class="evidence-row"><span>${esc(label)}</span><div class="evidence-values"><b class="baseline-value">${esc(formatter(before))}</b><i>→</i><b class="candidate-value">${esc(formatter(after))}</b></div><em class="${verdict}">${esc(deltaText)}</em></div>`;
+}
+function renderEvidenceDeck(dashboard = {}) {
+  const comparison = state.experiment?.comparison || {};
+  const reliability = comparison.reliability || state.experiment?.reliability || {};
+  const efficiency = comparison.efficiency || state.experiment?.efficiency || {};
+  const rb = reliability.baseline || {}, rc = reliability.candidate || {};
+  const eb = efficiency.baseline || {}, ec = efficiency.candidate || {};
+  const [base, candidate] = state.versions;
+  const baseConsistency=rb.all_pass_at_k ?? rb.pass_at_k, candidateConsistency=rc.all_pass_at_k ?? rc.pass_at_k;
+  document.querySelector('#stability-content').innerHTML = reliability.baseline ? `<div class="evidence-key"><span class="baseline-key">${esc(base || 'baseline')}</span><span class="candidate-key">${esc(candidate || 'candidate')}</span></div>${evidencePair('All-pass@3', baseConsistency, candidateConsistency, pct, false)}${evidencePair('Flaky case rate', rb.flaky_case_rate, rc.flaky_case_rate, pct, true)}<p class="evidence-note">All-pass@3 means all three repeats passed; it is a consistency metric, not standard Pass@3. ${esc(String(rc.eligible_case_count ?? 0))} Case groups had enough repeated Trials.</p>` : '<p class="empty big">Repeatability needs an experiment report with at least three Trials per Case.</p>';
+  document.querySelector('#efficiency-content').innerHTML = efficiency.baseline ? `<div class="evidence-key"><span class="baseline-key">${esc(base || 'baseline')}</span><span class="candidate-key">${esc(candidate || 'candidate')}</span></div>${evidencePair('P50 latency', eb.p50_duration_ms, ec.p50_duration_ms, fmt, true)}${evidencePair('P95 latency', eb.p95_duration_ms, ec.p95_duration_ms, fmt, true)}${evidencePair('P50 model tokens', eb.p50_model_tokens, ec.p50_model_tokens, v => Number.isFinite(Number(v)) ? `${Math.round(v).toLocaleString()} tok` : 'N/A', true)}${evidencePair('P95 model tokens', eb.p95_model_tokens, ec.p95_model_tokens, v => Number.isFinite(Number(v)) ? `${Math.round(v).toLocaleString()} tok` : 'N/A', true)}<p class="evidence-note">Tail metrics expose slow or expensive Trials that average values can hide.</p>` : '<p class="empty big">Tail metrics are not available in this report.</p>';
+  const cases = comparison.case_comparisons || state.experiment?.case_comparisons || [];
+  const changed = cases.filter(item => consistency(item.baseline) !== consistency(item.candidate));
+  const listed = (changed.length ? changed : cases).slice(0, 4);
+  document.querySelector('#regression-content').innerHTML = cases.length ? `<div class="case-signal-list">${listed.map(item => { const before=consistency(item.baseline), after=consistency(item.candidate), stateClass=before===after?'flat':after?'positive':'negative'; return `<button type="button" class="case-signal ${stateClass}" data-evidence-case="${esc(item.case_id)}"><span>${esc(item.case_id.replaceAll('_',' '))}</span><b>${before === null || before === undefined ? 'N/A' : before ? '3/3' : 'not 3/3'} <i>→</i> ${after === null || after === undefined ? 'N/A' : after ? '3/3' : 'not 3/3'}</b><small>${esc(String(item.paired_trial_count || 0))} paired Trials</small></button>`; }).join('')}</div><p class="evidence-note">Select a Case to inspect every paired Trial, Trace, and Diff.</p>` : '<p class="empty big">No Case-level paired report is available.</p>';
+  renderStatisticalEvidence(comparison.statistics || state.experiment?.statistics || {});
+  renderBehaviorEvidence(comparison.behavior || state.experiment?.behavior || dashboard.behavior || {});
+  renderPolicyStopEvidence();
+  document.querySelectorAll('[data-evidence-case]').forEach(button => button.addEventListener('click', () => renderCaseDetail(button.dataset.evidenceCase, true)));
+}
+function renderPolicyStopEvidence() {
+  const content = document.querySelector('#policy-stop-content'), evidence = state.policyStop || {};
+  if (!evidence.available) {
+    content.innerHTML = '<p class="empty big">No verification-stop policy Trace is available in this runtime.</p>';
+    return;
+  }
+  const clean = Number(evidence.post_stop_model_or_tool_spans || 0) === 0 && Number(evidence.missing_policy_stop_count || 0) === 0;
+  const status = clean ? 'INVARIANT HOLDS' : 'REVIEW REQUIRED';
+  content.innerHTML = `<div class="policy-stop-verdict ${clean ? 'verified' : 'review'}"><span>${esc(status)}</span><b>${esc(String(evidence.policy_stop_trace_count || 0))} / ${esc(String(evidence.candidate_trial_count || 0))}</b><small>candidate traces stopped after verification</small></div><div class="policy-stop-grid"><div><span>verification passed</span><b>${esc(String(evidence.verification_passed_count || 0))}</b></div><div><span>post-stop model / tool spans</span><b>${esc(String(evidence.post_stop_model_or_tool_spans || 0))}</b></div><div><span>missing stop events</span><b>${esc(String(evidence.missing_policy_stop_count || 0))}</b></div></div><p class="evidence-note">The trace-level invariant is stronger than a lower average: after the exact verification command passes, V4.1 records a policy stop before it can request another model or tool action.</p>`;
+}
+function renderStatisticalEvidence(statistics) {
+  const content = document.querySelector('#statistics-content');
+  const metrics = statistics?.metrics || {};
+  const latency = metrics.duration_ms;
+  if (!latency?.available) {
+    content.innerHTML = '<p class="empty big">Paired statistical evidence needs completed, valid Trials for both versions. It never substitutes for reliability or Gate evidence.</p>';
+    return;
+  }
+  const interval = latency.ci95 || {};
+  const cases = latency.case_outcomes || {};
+  const fmtDelta = value => Number.isFinite(Number(value)) ? signed(Math.round(Number(value)), 'ms') : 'N/A';
+  const conclusion = statistics.conclusion || {};
+  const label = {observed_latency_improvement:'OBSERVED IMPROVEMENT',inconclusive:'INCONCLUSIVE',limited_coverage:'LIMITED COVERAGE',not_available:'NOT AVAILABLE'}[conclusion.level] || 'DIAGNOSTIC';
+  content.innerHTML = `<div class="stat-verdict ${esc(conclusion.level || 'inconclusive')}"><span>${esc(label)}</span><b>${esc(fmtDelta(latency.point_estimate_median_delta))}</b><small>median paired latency delta</small></div><div class="stat-grid"><div><span>95% interval</span><b>${esc(fmtDelta(interval.low))} → ${esc(fmtDelta(interval.high))}</b></div><div><span>valid pairs</span><b>${esc(String(latency.paired_trial_count || 0))} / ${esc(String(statistics.eligible_case_count || 0))} Cases</b></div><div><span>Case outcomes</span><b>${esc(String(cases.candidate_lower || 0))} lower · ${esc(String(cases.candidate_higher || 0))} higher · ${esc(String(cases.tied || 0))} tie</b></div></div><p class="evidence-note">${esc(conclusion.reason || 'Clustered bootstrap resamples Cases, not individual repeats. Diagnostic only; it does not replace the Gate.')}</p>`;
+}
+function behaviorValue(value, availability, formatter = pct) { return availability && value !== null && value !== undefined ? formatter(value) : 'N/A'; }
+function renderBehaviorEvidence(behavior) {
+  const baseline = behavior.baseline, candidate = behavior.candidate;
+  const pair = (label, key, availabilityKey, formatter = pct, lowerIsBetter = true) => {
+    const before = baseline?.[key], after = candidate?.[key];
+    const availableBefore = baseline?.availability?.[availabilityKey] ?? before !== null;
+    const availableAfter = candidate?.availability?.[availabilityKey] ?? after !== null;
+    if (!baseline || !candidate) return `<div class="behavior-row"><span>${esc(label)}</span><b>${esc(behaviorValue(behavior?.[key], behavior?.availability?.[availabilityKey], formatter))}</b></div>`;
+    const delta = Number.isFinite(Number(before)) && Number.isFinite(Number(after)) ? Number(after)-Number(before) : null;
+    return `<div class="behavior-row"><span>${esc(label)}</span><div><b class="baseline-value">${esc(behaviorValue(before, availableBefore, formatter))}</b><i>→</i><b class="candidate-value">${esc(behaviorValue(after, availableAfter, formatter))}</b></div><em class="${delta === null ? 'flat' : deltaClass(delta, lowerIsBetter)}">${delta === null ? 'N/A' : signed((delta*100).toFixed(1),'pp')}</em></div>`;
+  };
+  const content = document.querySelector('#behavior-content');
+  if (!baseline && !candidate && !behavior?.instrumented_trial_count) {
+    content.innerHTML = '<p class="empty big">No semantic Trace evidence in this runtime. Run an instrumented Trial to inspect tool discipline.</p>';
+    return;
+  }
+  const count = baseline?.instrumented_trial_count ?? candidate?.instrumented_trial_count ?? behavior.instrumented_trial_count ?? 0;
+  const availability = baseline?.availability || candidate?.availability || behavior.availability || {};
+  const note = behavior.unavailable?.all_behavior_metrics || baseline?.unavailable?.all_behavior_metrics || candidate?.unavailable?.all_behavior_metrics;
+  content.innerHTML = `${baseline && candidate ? '<div class="evidence-key"><span class="baseline-key">baseline</span><span class="candidate-key">candidate</span></div>' : ''}${pair('Tool success rate','tool_success_rate','tool_outcomes',pct,false)}${pair('Repeated tool calls','repeated_tool_call_rate','repeated_tool_calls',pct,true)}${pair('Duplicate reads','duplicate_read_rate','duplicate_reads',pct,true)}${pair('Edit before read','edit_before_read_count','edit_before_read',v=>String(v),true)}<p class="evidence-note">${note ? esc(note) : `${esc(String(count))} instrumented Trial${count===1?'':'s'} · semantic fields are path/key/fingerprint only.`}</p>`;
 }
 function renderMatrix() {
   const [base, candidate] = state.versions; const grouped = new Map();
@@ -49,7 +207,8 @@ function renderMatrix() {
     const left=summarize(items.filter(x=>x.agent_version===base)), right=summarize(items.filter(x=>x.agent_version===candidate));
     const delta=right.duration-left.duration; const passDelta=right.pass-left.pass;
     const status = right.pass > left.pass ? 'improved' : right.pass < left.pass ? 'regressed' : 'stable';
-    return `<button class="comparison-row ${status} ${state.selectedCase===caseId?'selected':''}" data-case="${esc(caseId)}" aria-pressed="${state.selectedCase===caseId}" type="button"><span class="case-name">${esc(caseId.replaceAll('_',' '))}<small>${left.count || 0} × ${candidate ? 2 : 1} versions</small></span>${summaryCell(left, base)}<span class="delta-cell ${deltaClass(delta)}"><b>${signed(passDelta)}</b><small>pass</small><em>${signed(Math.round(delta),'ms')}</em></span>${summaryCell(right, candidate)}</button>`;
+    const primary = caseId === primaryCaseId();
+    return `<button class="comparison-row ${status} ${primary?'primary-case':''} ${state.selectedCase===caseId?'selected':''}" data-case="${esc(caseId)}" aria-pressed="${state.selectedCase===caseId}" type="button"><span class="case-name">${primary?'<i class="investigate-tag">INVESTIGATE</i>':''}${esc(caseId.replaceAll('_',' '))}<small>${left.count || 0} × ${candidate ? 2 : 1} versions</small></span>${summaryCell(left, base)}<span class="delta-cell ${deltaClass(delta)}"><b>${signed(passDelta)}</b><small>pass</small><em>${signed(Math.round(delta),'ms')}</em></span>${summaryCell(right, candidate)}</button>`;
   });
   document.querySelector('#comparison-rows').innerHTML = rows.join('') || '<p class="empty big">No paired Trial artifacts available.</p>';
   document.querySelectorAll('.comparison-row').forEach(row => row.addEventListener('click', () => renderCaseDetail(row.dataset.case, true)));
@@ -61,12 +220,29 @@ function renderCaseDetail(caseId, shouldScroll = false) {
   state.selectedCase=caseId; const panel=document.querySelector('#case-detail-panel'); panel.hidden=false; document.querySelector('#case-detail-title').textContent=caseId.replaceAll('_',' ');
   const picker=document.querySelector('#case-select'); picker.innerHTML=caseIds().map(id=>`<option value="${esc(id)}">${esc(id.replaceAll('_',' '))}</option>`).join(''); picker.value=caseId;
   document.querySelectorAll('.metric-tabs [data-metric]').forEach(tab=>{const selected=tab.dataset.metric===state.metric;tab.setAttribute('aria-selected',String(selected));tab.classList.toggle('active',selected);});
-  renderCaseChart(caseId); renderCaseSummary(caseId);
-  const [base, candidate]=state.versions; const columns=[base,candidate].filter(Boolean).map(version=>{const rows=state.trials.filter(t=>t.case_id===caseId&&t.agent_version===version);const s=summarize(rows);return `<section class="run-column"><p class="eyebrow">${esc(version || 'UNKNOWN')}</p><h3>${s.pass}/${s.count} valid passes</h3><div class="run-metrics"><span>Median <b>${fmt(s.duration)}</b></span><span>Tokens <b>${Math.round(s.tokens).toLocaleString()}</b></span><span>Tools <b>${s.tools}</b></span></div><div class="run-buttons">${rows.map(r=>`<button type="button" data-trial="${encodeURIComponent(r.id)}" class="trial-pill ${r.passed?'pass':'fail'}">T${esc(trialNumber(r))} · ${r.passed?'PASS':esc(r.status)}</button>`).join('')}</div></section>`;}).join('');
-  document.querySelector('#case-detail-content').innerHTML=columns || '<p class="empty big">No Trial artifacts for this Case.</p>';
+  renderCaseDiagnosis(caseId); renderCaseChart(caseId); renderCaseSummary(caseId);
+  const [base, candidate]=state.versions;
+  const rows=state.trials.filter(t=>t.case_id===caseId), grouped=new Map();
+  rows.forEach(row=>{const key=trialNumber(row);if(!grouped.has(key))grouped.set(key,{});grouped.get(key)[row.agent_version]=row;});
+  const trialCard=(row, role)=>row ? `<button type="button" data-trial="${encodeURIComponent(row.id)}" class="paired-trial-card ${role} ${row.passed?'pass':'fail'}"><span>${esc(role.toUpperCase())}</span><strong>${row.passed?'PASS':esc(String(row.failure_reason || row.status || 'NEEDS REVIEW').replaceAll('_',' '))}</strong><small>${fmt(row.duration_ms)} · ${Math.round(row.model_tokens||0).toLocaleString()} tok · ${row.tool_calls} tools</small></button>` : `<div class="paired-trial-card missing"><span>${esc(role.toUpperCase())}</span><strong>MISSING</strong><small>No artifact for this side.</small></div>`;
+  const pairs=[...grouped.entries()].sort(([a],[b])=>Number(a)-Number(b)||a.localeCompare(b)).map(([index,pair])=>{const left=pair[base],right=pair[candidate],different=left?.passed!==right?.passed;return `<section class="paired-trial-row ${different?'behavior-difference':''}"><div class="pair-index"><span>TRIAL</span><strong>${esc(String(index).padStart(3,'0'))}</strong>${different?'<small>OUTCOME DIFFERENCE</small>':''}</div>${trialCard(left,'baseline')}<div class="pair-arrow" aria-hidden="true">→</div>${trialCard(right,'candidate')}</section>`;}).join('');
+  document.querySelector('#case-detail-content').innerHTML=pairs || '<p class="empty big">No paired Trial artifacts for this Case.</p>';
   document.querySelectorAll('[data-trial]').forEach(b=>b.addEventListener('click',()=>showTrial(decodeURIComponent(b.dataset.trial))));
   renderMatrix();
   if (shouldScroll) panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function renderCaseDiagnosis(caseId) {
+  const report=caseComparisons().find(item=>item.case_id===caseId), pairs=report?.paired_trials || [];
+  const mismatch=pairs.find(pair=>pair.baseline?.valid_pass!==pair.candidate?.valid_pass);
+  const failed=state.trials.find(row=>row.case_id===caseId&&!row.passed);
+  const diagnosis=document.querySelector('#case-diagnosis');
+  if (!mismatch && !failed) {
+    diagnosis.innerHTML='<span class="diagnosis-status stable">STABLE OUTCOME</span><p>Both versions reached the same validity outcome. Use paired bars to inspect efficiency variance.</p>';
+    return;
+  }
+  const side=mismatch?.baseline?.valid_pass===false?'Baseline':'Candidate';
+  const reason=failed?.failure_reason || failed?.status || 'validity mismatch';
+  diagnosis.innerHTML=`<span class="diagnosis-status investigate">INVESTIGATE TRIAL ${esc(String(mismatch?.trial_index || trialNumber(failed)).padStart(3,'0'))}</span><p><b>${esc(side)}</b> failed the valid-pass boundary: <strong>${esc(reason.replaceAll('_',' '))}</strong>. The paired counterpart passed; open both artifacts below to compare tool behavior.</p>`;
 }
 function renderCaseChart(caseId) {
   const metric=METRICS[state.metric], [base,candidate]=state.versions, rows=state.trials.filter(t=>t.case_id===caseId);

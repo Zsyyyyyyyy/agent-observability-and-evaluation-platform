@@ -57,6 +57,26 @@ class RunStoreTests(unittest.TestCase):
 
             self.assertEqual([score["evaluator"] for score in store.get_scores("trial_1")], ["new"])
 
+    def test_attempt_history_keeps_previous_execution_while_trial_points_to_latest(self):
+        with TemporaryDirectory() as directory:
+            store = RunStore(Path(directory) / "runs.db")
+            first = {"trial_id": "trial_1", "attempt_id": "attempt_001", "trace_id": "trace_1", "status": "trace_incomplete"}
+            second = {"trial_id": "trial_1", "attempt_id": "attempt_002", "trace_id": "trace_2", "status": "completed"}
+            store.record_run(first, [])
+            store.record_run(second, [])
+
+            self.assertEqual(store.get_trial("trial_1"), second)
+            self.assertEqual(store.list_attempts("trial_1"), [first, second])
+
+    def test_selected_projection_requires_matching_attempt_identity(self):
+        with TemporaryDirectory() as directory:
+            store = RunStore(Path(directory) / "runs.db")
+            result = {"trial_id": "trial_1", "attempt_id": "attempt_001", "trace_id": "trace_1", "status": "completed"}
+            with self.assertRaisesRegex(ValueError, "selected projection"):
+                store.record_selected_projection(result, [], "attempt_002")
+            store.record_selected_projection(result, [], "attempt_001")
+            self.assertEqual(store.get_trial("trial_1"), result)
+
 
 if __name__ == "__main__":
     unittest.main()

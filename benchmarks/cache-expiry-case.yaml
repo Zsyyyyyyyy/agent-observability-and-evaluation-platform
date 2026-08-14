@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: cache_expiry_boundary
+version: 1
+title: 修复缓存过期时间边界
+fixture: {path: fixtures/cache_expiry, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 read_cached：缓存项只在 now 严格早于 expires_at 时可读；到达 expires_at 的瞬间即为 miss，缺失键也应为 miss。请保留注入时钟的设计，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 16000, max_tool_calls: 16, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

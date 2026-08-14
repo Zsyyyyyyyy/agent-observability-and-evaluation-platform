@@ -35,7 +35,7 @@ git add .
 git status
 ```
 
-在 `git status` 中再次确认没有 `.env`、`.runtime/` 与实际模型输出，再创建首个提交并推送到新的 GitHub 仓库。不要把父级仓库中的 `s01`–`s20` 一并上传；`s20-replay` 仅作为只读接入样例，README 已明确边界。
+在 `git status` 中再次确认没有 `.env`、`.runtime/` 与实际模型输出，再创建首个提交并推送到新的 GitHub 仓库。不要把父级仓库中的 `s01`–`legacy agent` 一并上传；`readonly-replay` 仅作为只读接入样例，README 已明确边界。
 
 ## 发布后人工检查
 

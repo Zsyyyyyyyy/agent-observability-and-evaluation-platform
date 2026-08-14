@@ -5,7 +5,7 @@ id: smoke_calculator_empty_input
 version: 1
 title: 修复计算器空输入异常
 description: >-
-  用一个最小 Python Fixture 验证 s20 Adapter、临时 Worktree、工具代理、
+  用一个最小 Python Fixture 验证 external Agent Adapter、临时 Worktree、工具代理、
   测试执行、Git Diff、Trace 和 Trial Result 是否能完成端到端闭环。
 
 fixture:

@@ -18,13 +18,19 @@
       <div><p class="eyebrow">CANDIDATE PROMOTION</p><h1>Should this agent<br><em>ship?</em></h1></div>
       <div id="gate-card" class="gate-card" aria-live="polite"></div>
     </section>
-    <p id="runtime-root" class="runtime">Loading runtime…</p>
+    <section class="decision-spine" aria-labelledby="decision-spine-title">
+      <div class="decision-spine-head">
+        <div><p class="eyebrow">DECISION PATH</p><h2 id="decision-spine-title">Follow the evidence, not the headline.</h2></div>
+        <p>Policy decision → statistical confidence → coverage → primary Case</p>
+      </div>
+      <div id="decision-spine-content" class="decision-spine-content" aria-live="polite"></div>
+    </section>
     <section class="metrics" aria-label="Experiment summary">
       <article><span>ACTIVE TRIALS</span><strong id="trial-count">—</strong></article>
-      <article><span>PASS DELTA</span><strong id="pass-delta">—</strong></article>
-      <article><span>LATENCY DELTA</span><strong id="duration-delta">—</strong></article>
-      <article><span>TOKEN DELTA</span><strong id="token-delta">—</strong></article>
-      <article><span>RELIABILITY</span><strong id="reliability">—</strong></article>
+      <article><span>ALL-ATTEMPT PASS Δ</span><strong id="pass-delta">—</strong></article>
+      <article><span>VALID-PAIR LATENCY Δ</span><strong id="duration-delta">—</strong></article>
+      <article><span>VALID-PAIR TOKEN Δ</span><strong id="token-delta">—</strong></article>
+      <article><span>ALL-PASS@3 Δ</span><strong id="reliability">—</strong></article>
     </section>
 
     <section class="workspace">
@@ -37,8 +43,46 @@
       <aside class="panel reliability-panel" aria-labelledby="reliability-title">
         <p class="eyebrow">FAILURE BOUNDARY</p><h2 id="reliability-title">Reliability</h2>
         <div id="reliability-content"></div>
+        <div id="attribution-content" class="attribution-content"></div>
         <p class="aside-note">Model gateway failures are tracked separately from Agent quality. A passing test alone never promotes a version.</p>
       </aside>
+    </section>
+
+    <section class="evidence-deck" aria-label="Evaluation metrics v2">
+      <section class="panel evidence-panel" aria-labelledby="stability-title">
+        <div class="panel-head"><div><p class="eyebrow">REPEATABILITY CHECK</p><h2 id="stability-title">Stability over repeats</h2></div><span class="section-hint">all-pass@3 / flaky cases</span></div>
+        <div id="stability-content" class="evidence-content"></div>
+      </section>
+      <section class="panel evidence-panel" aria-labelledby="tail-title">
+        <div class="panel-head"><div><p class="eyebrow">TAIL PERFORMANCE</p><h2 id="tail-title">Efficiency, not averages</h2></div><span class="section-hint">P50 / P95</span></div>
+        <div id="efficiency-content" class="evidence-content"></div>
+      </section>
+      <section class="panel evidence-panel regression-panel" aria-labelledby="regression-title">
+        <div class="panel-head"><div><p class="eyebrow">CASE-LEVEL EVIDENCE</p><h2 id="regression-title">Where did it change?</h2></div><span class="section-hint">paired trials</span></div>
+        <div id="regression-content" class="evidence-content"></div>
+      </section>
+      <section class="panel evidence-panel statistics-panel" aria-labelledby="statistics-title">
+        <div class="panel-head"><div><p class="eyebrow">STATISTICAL EVIDENCE</p><h2 id="statistics-title">How stable is the delta?</h2></div><span class="section-hint">paired Case bootstrap</span></div>
+        <div id="statistics-content" class="evidence-content"></div>
+      </section>
+      <section class="panel evidence-panel behavior-panel" aria-labelledby="behavior-title">
+        <div class="panel-head"><div><p class="eyebrow">TOOLING DISCIPLINE</p><h2 id="behavior-title">Behavior evidence</h2></div><span class="section-hint">trace semantics</span></div>
+        <div id="behavior-content" class="evidence-content"></div>
+      </section>
+      <section class="panel evidence-panel policy-stop-panel" aria-labelledby="policy-stop-title">
+        <div class="panel-head"><div><p class="eyebrow">RUNTIME INVARIANT</p><h2 id="policy-stop-title">Success-stop evidence</h2></div><span class="section-hint">selected candidate traces</span></div>
+        <div id="policy-stop-content" class="evidence-content"></div>
+      </section>
+    </section>
+
+    <section class="panel evolution-panel" aria-labelledby="evolution-title">
+      <div class="panel-head"><div><p class="eyebrow">VERSION MEMORY</p><h2 id="evolution-title">Evolution timeline</h2></div><span id="evolution-hint" class="section-hint">catalog loading</span></div>
+      <div id="evolution-content" class="evolution-content"></div>
+    </section>
+
+    <section class="panel protocol-panel" aria-labelledby="protocol-title">
+      <div class="panel-head"><div><p class="eyebrow">EXPERIMENT CONTRACT</p><h2 id="protocol-title">Protocol snapshot</h2></div><span id="protocol-hint" class="section-hint">loading</span></div>
+      <div id="protocol-content" class="protocol-content"></div>
     </section>
 
     <section id="case-detail-panel" class="panel case-detail" hidden aria-live="polite">
@@ -51,9 +95,10 @@
           <button type="button" role="tab" data-metric="tool_calls" aria-selected="false">Tool calls</button>
         </div>
       </div>
+      <div id="case-diagnosis" class="case-diagnosis"></div>
       <div id="case-chart" class="case-chart"></div>
       <div id="case-summary" class="case-summary-grid"></div>
-      <div class="paired-heading"><p class="eyebrow">TRIAL ARTIFACTS</p><span>Click a Trial to open its trace and diff.</span></div>
+      <div class="paired-heading"><p class="eyebrow">PAIRED TRIAL EVIDENCE</p><span>Each row is the same Case and repeat index. Open either side to inspect its trace and diff.</span></div>
       <div id="case-detail-content" class="paired-runs"></div>
     </section>
 

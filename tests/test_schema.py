@@ -58,6 +58,15 @@ class TraceSchemaTests(unittest.TestCase):
         self.assertTrue(any("parent span" in error for error in validation.errors))
         self.assertTrue(any("trial_id" in error for error in validation.errors))
 
+    def test_expected_root_attributes_reject_identity_override(self):
+        records = [
+            event(1, "span_start", span_id="root", parent_span_id=None, name="agent.run", attributes={"trial_id": "new", "adapter_id": "wrong", "agent_version": "v1"}),
+            event(2, "span_end", span_id="root", status="ok", attributes={}),
+        ]
+        validation = validate_events(records, expected_trial_id="new", expected_root_attributes={"adapter_id": "external-command", "agent_version": "v1"})
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("adapter_id" in error for error in validation.errors))
+
 
 if __name__ == "__main__":
     unittest.main()

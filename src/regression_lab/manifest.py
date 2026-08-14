@@ -272,6 +272,7 @@ def expand_trials(manifest: dict[str, Any], project_root: str | Path | None = No
                 "max_duration_ms": execution["timeout_seconds"] * 1000,
             },
             "max_tokens": execution["max_tokens"],
+            "max_retries": execution.get("max_retries", 0),
             "sandbox": {
                 "network": execution["network"],
                 "timeout_seconds": execution["timeout_seconds"],

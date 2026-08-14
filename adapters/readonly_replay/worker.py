@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run one s20 Trial with replayed model responses.
+"""Run one external Agent Trial with replayed model responses.
 
 Day 2 deliberately keeps this worker dependency-light. It loads the existing
-s20 module without editing it, replaces only its runtime boundaries, and
+external Agent module without editing it, replaces only its runtime boundaries, and
 produces a JSONL trace plus a structured result. Real model and Docker-backed
 handlers are follow-up work after this smoke path is proven.
 """
@@ -31,6 +31,7 @@ from regression_lab.trace import TraceCollector
 from regression_lab.sandbox import DockerSandbox, SandboxConfig, SandboxUnavailable
 from regression_lab.schema import validate_trace
 from regression_lab.store import RunStore
+from regression_lab.artifacts import write_json_atomically
 from regression_lab.evaluators import evaluate_baseline
 
 
@@ -165,15 +166,15 @@ class ReplayClient:
         )
 
 
-def _load_s20(source: Path, worktree: Path):
+def _load_replay_source(source: Path, worktree: Path):
     os.chdir(worktree)
-    # The replay worker does not call a provider, but s20 reads MODEL_ID at
+    # The replay worker does not call a provider, but external Agent reads MODEL_ID at
     # import time. Real runs will override this through the Trial environment.
     os.environ.setdefault("MODEL_ID", "replay-model")
     _install_import_stubs()
-    spec = importlib.util.spec_from_file_location("regression_s20_worker", source)
+    spec = importlib.util.spec_from_file_location("regression_readonly_replay_worker", source)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load s20 source: {source}")
+        raise RuntimeError(f"Unable to load external Agent source: {source}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -407,24 +408,25 @@ def _git(worktree: Path, *args: str) -> str:
 def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
     trial_id = spec.get("trial_id", f"trial_{uuid.uuid4().hex[:10]}")
     worktree = Path(spec["worktree"]).resolve()
-    source_value = spec.get("s20_source")
+    source_value = spec.get("replay_source")
     if not source_value:
-        raise ValueError("s20_source is required for the optional s20-replay bridge")
+        raise ValueError("replay_source is required for the optional readonly-replay bridge")
     source = Path(str(source_value)).expanduser().resolve()
     trace_output = Path(spec["trace_output"]).resolve()
     result_output = Path(spec["result_output"]).resolve()
     if not worktree.is_dir():
         raise ValueError(f"worktree does not exist: {worktree}")
     if not source.is_file():
-        raise ValueError(f"s20 source does not exist: {source}")
+        raise ValueError(f"external Agent source does not exist: {source}")
 
     trace = TraceCollector(trace_output, f"trace_{uuid.uuid4().hex[:12]}")
     root_span = trace.start_span("agent.run", trial_id=trial_id, agent_version=spec.get("agent_version"))
     started = time.monotonic()
     result: dict[str, Any] = {
         "trial_id": trial_id,
-        "adapter_id": spec.get("adapter_id", "s20-replay"),
-        "adapter_version": (spec.get("adapter") or {}).get("default_version", "s20-baseline-replay-v1"),
+        "adapter_id": spec.get("adapter_id", "readonly-replay"),
+        "adapter_version": (spec.get("adapter") or {}).get("default_version", "readonly-replay-v1"),
+        "attempt_id": spec.get("attempt_id"),
         "status": "infra_failed",
         "trace_id": trace.trace_id,
         "agent_exit_reason": None,
@@ -453,7 +455,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
                 if key in {"image", "network", "cpus", "memory", "pids_limit", "timeout_seconds", "tmpfs_size"}
             }
             sandbox = DockerSandbox(worktree, SandboxConfig(**config_fields))
-        module = _load_s20(source, worktree)
+        module = _load_replay_source(source, worktree)
         replay = ReplayClient(
             include_bash=bool(spec.get("replay_bash")),
             case_id=str(spec.get("case_id", "")),
@@ -532,7 +534,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
             except Exception as exc:
                 result["store_error"] = f"{type(exc).__name__}: {exc}"
         result_output.parent.mkdir(parents=True, exist_ok=True)
-        result_output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomically(result_output, result)
     return result
 
 

@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: webhook_signature_canonicalization
+version: 1
+title: 修复 Webhook 签名规范化与失败关闭
+fixture: {path: fixtures/webhook_signature, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 webhook 签名：逻辑等价但字典插入顺序不同的事件必须得到相同签名；篡改、错误密钥和畸形签名必须返回 False。保持 HMAC-SHA256 协议，不能修改 tests，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 18000, max_tool_calls: 18, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

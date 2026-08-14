@@ -34,6 +34,7 @@ def validate_events(
     *,
     expected_trace_id: str | None = None,
     expected_trial_id: str | None = None,
+    expected_root_attributes: dict[str, str] | None = None,
 ) -> TraceValidation:
     """Validate ordering, identity, and span lifecycle invariants."""
 
@@ -97,6 +98,11 @@ def validate_events(
                 trial_id = (event.get("attributes") or {}).get("trial_id")
                 if trial_id != expected_trial_id:
                     errors.append(f"event {index}: agent.run trial_id does not match")
+            if event.get("name") == "agent.run" and expected_root_attributes:
+                attributes = event.get("attributes") or {}
+                for key, expected in expected_root_attributes.items():
+                    if attributes.get(key) != expected:
+                        errors.append(f"event {index}: agent.run {key} does not match")
 
         elif kind == "span_end":
             span_id = event.get("span_id")
@@ -139,6 +145,7 @@ def validate_trace(
     *,
     expected_trace_id: str | None = None,
     expected_trial_id: str | None = None,
+    expected_root_attributes: dict[str, str] | None = None,
 ) -> TraceValidation:
     """Read and validate a JSONL trace, reporting malformed lines as errors."""
 
@@ -163,6 +170,7 @@ def validate_trace(
         events,
         expected_trace_id=expected_trace_id,
         expected_trial_id=expected_trial_id,
+        expected_root_attributes=expected_root_attributes,
     )
     return TraceValidation(
         valid=validation.valid and not errors,

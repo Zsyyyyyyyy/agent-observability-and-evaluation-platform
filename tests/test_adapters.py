@@ -4,13 +4,18 @@ from regression_lab.adapters import AdapterError, get_adapter, registered_adapte
 
 
 class AdapterRegistryTests(unittest.TestCase):
-    def test_s20_replay_is_a_runnable_registered_adapter(self):
-        adapter = get_adapter("s20-replay")
+    def test_readonly_replay_is_a_runnable_registered_adapter(self):
+        adapter = get_adapter("readonly-replay")
 
         self.assertTrue(adapter.worker_path.is_file())
-        self.assertEqual(adapter.default_version, "s20-baseline-replay-v1")
+        self.assertEqual(adapter.default_version, "readonly-replay-v1")
         self.assertIn("edit_file", adapter.capabilities)
-        self.assertEqual([item.adapter_id for item in registered_adapters()], ["failure-probe", "react-agent", "s20-replay"])
+        self.assertEqual([item.adapter_id for item in registered_adapters()], ["external-command", "failure-probe", "react-agent", "readonly-replay"])
+
+    def test_external_command_is_registered_with_its_own_worker(self):
+        adapter = get_adapter("external-command")
+        self.assertTrue(adapter.worker_path.is_file())
+        self.assertEqual(adapter.default_version, "external-agent-v1")
 
     def test_failure_probe_is_explicitly_registered_for_platform_self_tests(self):
         adapter = get_adapter("failure-probe")

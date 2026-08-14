@@ -20,6 +20,7 @@ from regression_lab.evaluators import evaluate_baseline
 from regression_lab.sandbox import DockerSandbox, SandboxConfig
 from regression_lab.schema import validate_trace
 from regression_lab.store import RunStore
+from regression_lab.artifacts import write_json_atomically
 from regression_lab.trace import TraceCollector
 
 
@@ -58,7 +59,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
     result: dict[str, Any] = {
         "trial_id": trial_id, "adapter_id": "failure-probe", "adapter_version": "failure-probe-v1",
-        "agent_version": spec.get("agent_version"), "status": "infra_failed", "trace_id": trace.trace_id,
+        "agent_version": spec.get("agent_version"), "attempt_id": spec.get("attempt_id"), "status": "infra_failed", "trace_id": trace.trace_id,
         "agent_response": "controlled failure probe", "changed_files": [], "test_exit_code": -1,
         "allowed_paths": spec.get("allowed_paths", ["**"]), "forbidden_paths": spec.get("forbidden_paths", []),
         "allowed_tools": spec.get("allowed_tools", []), "denied_tools": spec.get("denied_tools", []),
@@ -93,7 +94,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         result["scores"] = result["evaluation"]["scores"]
         if spec.get("run_store"):
             RunStore(spec["run_store"]).record_run(result, result["scores"])
-        Path(spec["result_output"]).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomically(spec["result_output"], result)
     return result
 
 

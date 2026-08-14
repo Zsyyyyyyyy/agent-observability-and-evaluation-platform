@@ -25,7 +25,11 @@ from regression_lab.evaluators import evaluate_baseline
 from regression_lab.sandbox import DockerSandbox, SandboxConfig, SandboxUnavailable
 from regression_lab.schema import validate_trace
 from regression_lab.store import RunStore
+from regression_lab.artifacts import write_json_atomically
 from regression_lab.trace import TraceCollector
+from regression_lab.tool_semantics import semantic_tool_attributes
+from regression_lab.behavior import summarize_trial_behavior
+from regression_lab.attribution import attribute_trial
 
 
 def _agent_profile(agent_version: Any, test_command: str) -> tuple[str, str]:
@@ -82,7 +86,7 @@ def run_trial(spec: dict[str, Any], client: OpenAICompatibleClient | None = None
     profile_id, system_prompt = _agent_profile(spec.get("agent_version"), str(spec["test_command"]))
     root = trace.start_span("agent.run", trial_id=trial_id, agent_version=spec.get("agent_version"), adapter_id="react-agent", agent_profile=profile_id, case_id=spec.get("case_id"))
     started = time.monotonic()
-    result: dict[str, Any] = {"trial_id": trial_id, "adapter_id": "react-agent", "adapter_version": (spec.get("adapter") or {}).get("default_version", "react-agent-v1"), "agent_version": spec.get("agent_version"), "agent_profile": profile_id, "status": "infra_failed", "trace_id": trace.trace_id, "agent_exit_reason": None, "agent_response": "", "changed_files": [], "test_exit_code": None, "error": None, "allowed_paths": spec.get("allowed_paths", ["**"]), "forbidden_paths": spec.get("forbidden_paths", []), "allowed_tools": [], "denied_tools": [], "budget": spec.get("budget", {}), "trace_path": str(spec["trace_output"]), "run_store": spec.get("run_store"), "model_usage": {}}
+    result: dict[str, Any] = {"trial_id": trial_id, "adapter_id": "react-agent", "adapter_version": (spec.get("adapter") or {}).get("default_version", "react-agent-v1"), "agent_version": spec.get("agent_version"), "agent_profile": profile_id, "attempt_id": spec.get("attempt_id"), "status": "infra_failed", "trace_id": trace.trace_id, "agent_exit_reason": None, "agent_response": "", "changed_files": [], "test_exit_code": None, "error": None, "allowed_paths": spec.get("allowed_paths", ["**"]), "forbidden_paths": spec.get("forbidden_paths", []), "allowed_tools": [], "denied_tools": [], "budget": spec.get("budget", {}), "trace_path": str(spec["trace_output"]), "run_store": spec.get("run_store"), "model_usage": {}}
     try:
         if not worktree.is_dir():
             raise ValueError(f"worktree does not exist: {worktree}")
@@ -122,7 +126,8 @@ def run_trial(spec: dict[str, Any], client: OpenAICompatibleClient | None = None
                 if calls > max_calls:
                     result["status"], result["agent_exit_reason"] = "budget_exceeded", "max_tool_calls"
                     raise StopIteration
-                span = trace.start_span("tool.call", parent_id=root, tool_name=call.name, tool_use_id=call.call_id)
+                semantic_attrs = semantic_tool_attributes(call.name, call.arguments, worktree=worktree)
+                span = trace.start_span("tool.call", parent_id=root, tool_name=call.name, tool_use_id=call.call_id, **semantic_attrs)
                 tool_started = time.monotonic()
                 try:
                     if call.name not in allowed:
@@ -152,6 +157,7 @@ def run_trial(spec: dict[str, Any], client: OpenAICompatibleClient | None = None
             result["status"], result["error"] = "infra_failed", f"git evidence failed: {type(exc).__name__}: {exc}"
         trace.end_span(root, status="ok" if result["status"] == "completed" else result["status"], duration_ms=round((time.monotonic() - started) * 1000, 3))
         result["trace_validation"] = validate_trace(result["trace_path"], expected_trace_id=trace.trace_id, expected_trial_id=trial_id).as_dict()
+        result["behavior"] = summarize_trial_behavior(result)
         if result["status"] == "completed" and not result["trace_validation"]["valid"]:
             # A passing test without a valid evidence trace is not a completed,
             # resumable Trial. This mirrors the replay adapter's fail-closed
@@ -161,10 +167,11 @@ def run_trial(spec: dict[str, Any], client: OpenAICompatibleClient | None = None
         result["trace_summary"] = trace.summary()
         result["evaluation"] = evaluate_baseline(result)
         result["scores"] = result["evaluation"]["scores"]
+        result["failure_attribution"] = attribute_trial(result)
         if result.get("run_store"):
             try: RunStore(result["run_store"]).record_run(result, result["scores"])
             except Exception as exc: result["store_error"] = f"{type(exc).__name__}: {exc}"
-        Path(spec["result_output"]).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomically(spec["result_output"], result)
     return result
 
 

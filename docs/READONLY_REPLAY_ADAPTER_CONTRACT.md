@@ -1,15 +1,15 @@
-# s20 Adapter Contract
+# Read-only Replay Adapter Contract
 
 > 状态：Day 1 设计冻结草案  
-> 被测对象：外部 `s20_comprehensive/code.py`  只读接入（本仓库不包含该源码，运行时通过 `--s20-source` 显式提供）  
-> 适配器实现位置：`study/Regression/adapters/s20/`  
-> 目标：在不改动 s20 源码的前提下，将一次 Agent Run 转换为可追踪的 Trial
+> 被测对象：外部 `agent_entry.py` 的只读接入（本仓库不包含该源码，运行时通过 `--replay-source` 显式提供）
+> 适配器实现位置：`adapters/readonly_replay/`
+> 目标：在不改动外部 Agent 源码的前提下，将一次 Agent Run 转换为可追踪的 Trial
 
 ## 1. 审计结论
 
 ### 1.1 可复用的运行入口
 
-s20 的交互入口位于 `if __name__ == "__main__"`，但真正的 Agent 循环由以下函数承载：
+legacy agent 的交互入口位于 `if __name__ == "__main__"`，但真正的 Agent 循环由以下函数承载：
 
 ```python
 agent_loop(messages: list, context: dict) -> None
@@ -18,14 +18,14 @@ agent_loop(messages: list, context: dict) -> None
 它会原地修改 `messages`，并在没有新的 `tool_use`、发生不可恢复异常或恢复次数耗尽时返回。因此 Adapter 不启动交互式 CLI，而是在独立 Worker 进程中：
 
 1. 设置 Trial Worktree 为当前工作目录。
-2. 加载 s20 模块。
+2. 加载 legacy agent 模块。
 3. 创建单条用户消息和空 Context。
 4. 调用 `agent_loop(messages, context)`。
 5. 从消息历史、Trace Collector 和 Worktree 中生成 Trial Result。
 
 ### 1.2 导入前置条件
 
-s20 在模块导入阶段会读取环境和初始化全局状态：
+legacy agent 在模块导入阶段会读取环境和初始化全局状态：
 
 - `load_dotenv(override=True)`。
 - 创建 Anthropic Client。
@@ -34,7 +34,7 @@ s20 在模块导入阶段会读取环境和初始化全局状态：
 - 创建 `.tasks`、`.worktrees` 等目录。
 - 启动 Cron Scheduler 后台线程。
 
-因此每个 Trial 必须使用新的 Worker 进程，不能在同一个 Python 进程中复用 s20 模块。Adapter 必须在导入前完成：
+因此每个 Trial 必须使用新的 Worker 进程，不能在同一个 Python 进程中复用 legacy agent 模块。Adapter 必须在导入前完成：
 
 - `MODEL_ID`、API Base URL 和必要凭证注入。
 - Worktree 当前目录切换。
@@ -43,7 +43,7 @@ s20 在模块导入阶段会读取环境和初始化全局状态：
 
 ### 1.3 调用与工具边界
 
-s20 的主循环每轮执行以下流程：
+legacy agent 的主循环每轮执行以下流程：
 
 ```text
 prepare_context
@@ -70,14 +70,14 @@ prepare_context
 ### 2.1 Baseline 与 Candidate
 
 ```text
-s20_comprehensive/code.py
+agent_entry.py
         │
         ├── Baseline：原始模块，代码只读
         │
         └── Candidate：Regression 内的 Adapter Profile/版本配置
 ```
 
-Baseline 不在运行过程中写入 s20 源目录。Candidate 的行为变化必须通过 `study/Regression/` 内的 Profile、Wrapper 或独立实现表达，并记录到 AgentVersion。
+Baseline 不在运行过程中写入 legacy agent 源目录。Candidate 的行为变化必须通过 `study/Regression/` 内的 Profile、Wrapper 或独立实现表达，并记录到 AgentVersion。
 
 ### 2.2 单 Trial 单 Worker
 
@@ -88,7 +88,7 @@ Baseline 不在运行过程中写入 s20 源目录。Candidate 的行为变化�
 - `mcp_clients`。
 - `background_tasks`。
 - `scheduled_jobs`。
-- s20 导入阶段创建的文件和线程。
+- legacy agent 导入阶段创建的文件和线程。
 
 Worker 退出后，Adapter 只从结构化 Result、Trace 文件和 Git Worktree 获取结果。
 
@@ -112,7 +112,7 @@ Coding Benchmark 初期只允许：
 - `keep_worktree`
 - `deploy` 类 MCP 工具
 
-s20 的 System Prompt 仍会列出完整工具目录，因此 Adapter 必须在实际 Tool Pool 和 PreToolUse Policy 两层同时限制，不能只依赖 Prompt。
+legacy agent 的 System Prompt 仍会列出完整工具目录，因此 Adapter 必须在实际 Tool Pool 和 PreToolUse Policy 两层同时限制，不能只依赖 Prompt。
 
 ## 3. Trace Contract
 
@@ -193,12 +193,12 @@ agent.run
 
 ## 4. 工具执行策略
 
-s20 原始 `run_bash` 使用宿主机 `subprocess.run(..., shell=True)`。这不能直接用于回归平台执行不可信模型输出。
+legacy agent 原始 `run_bash` 使用宿主机 `subprocess.run(..., shell=True)`。这不能直接用于回归平台执行不可信模型输出。
 
 Adapter 必须在 Worker 内替换工具 Handler：
 
 ```text
-原始 s20 Tool Pool
+原始 legacy agent Tool Pool
         ↓
 Regression Tool Policy
         ↓
@@ -227,7 +227,7 @@ Worker 接收一个 JSON 文件或 JSON stdin：
 ```json
 {
   "trial_id": "trial_smoke_001",
-  "agent_version": "s20-baseline-v1",
+  "agent_version": "legacy agent-baseline-v1",
   "case_id": "smoke_calculator_empty_input",
   "prompt": "修复空输入导致的计算器异常，并运行测试。",
   "worktree": "/absolute/path/to/worktree",
@@ -270,8 +270,8 @@ Worker 必须生成结构化 Result，即使 Agent 失败：
 
 ### Day 1 设计验收
 
-- [x] 已确认 s20 存在可调用的 `agent_loop`。
-- [x] 已确认 s20 不是纯黑盒，可从 `call_llm`、Tool Pool 和 Hook 边界包装。
+- [x] 已确认 legacy agent 存在可调用的 `agent_loop`。
+- [x] 已确认 legacy agent 不是纯黑盒，可从 `call_llm`、Tool Pool 和 Hook 边界包装。
 - [x] 已确认模块导入有全局副作用，因此采用单 Trial 单 Worker。
 - [x] 已识别原始 `run_bash` 不能直接用于不可信 Agent 输出。
 - [x] 已定义 Tool Allowlist 和禁止工具。
@@ -279,19 +279,19 @@ Worker 必须生成结构化 Result，即使 Agent 失败：
 
 ### Day 2–3 运行验收
 
-- [ ] Worker 能在临时 Worktree 中加载 s20。
+- [ ] Worker 能在临时 Worktree 中加载 legacy agent。
 - [ ] Worker 能通过 Adapter 注入一个固定 Prompt。
 - [ ] Worker 能完成至少一次模型调用。
 - [ ] Worker 能捕获至少一次工具调用或明确记录无工具调用。
 - [ ] Worker 能生成结构化 Result。
 - [ ] Worker 能收集测试退出码和 Git Diff。
 - [ ] Phoenix 能显示完整 `agent.run` Trace。
-- [ ] s20 原始文件没有修改。
+- [ ] legacy agent 原始文件没有修改。
 
 ## 7. 已知限制
 
-- s20 的全局模块状态使进程内多 Trial 复用不安全，因此 v0.1 不支持进程内复用。
-- s20 的 System Prompt 会展示比 Coding Case 实际允许更多的工具，需要 Adapter 层额外限制。
-- s20 原始实现不是沙箱；安全边界由 Regression Tool Proxy 和 Docker Runner 提供。
+- legacy agent 的全局模块状态使进程内多 Trial 复用不安全，因此 v0.1 不支持进程内复用。
+- legacy agent 的 System Prompt 会展示比 Coding Case 实际允许更多的工具，需要 Adapter 层额外限制。
+- legacy agent 原始实现不是沙箱；安全边界由 Regression Tool Proxy 和 Docker Runner 提供。
 - 后台任务、MCP、Cron 和 Teammate 在 Coding Benchmark 中默认禁用，不作为 v0.1 评测范围。
 - 如果某些内部事件无法通过外部包装捕获，必须在报告中标记 Trace Coverage，而不是伪造完整 Trace。

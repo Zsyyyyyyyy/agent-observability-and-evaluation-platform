@@ -35,6 +35,9 @@ def handler_for(repository: DashboardRepository, static_root: Path):
             if path == "/api/trials": return self._json(repository.trials())
             if path == "/api/experiments/latest": return self._json(repository.latest_experiment() or {})
             if path == "/api/gate/latest": return self._json(repository.latest_gate() or {})
+            if path == "/api/protocol": return self._json(repository.protocol())
+            if path == "/api/evolution": return self._json(repository.evolution())
+            if path == "/api/policy-stop": return self._json(repository.policy_stop_evidence())
             if path.startswith("/api/trials/"):
                 detail = repository.trial(unquote(path.removeprefix("/api/trials/")))
                 return self._json(detail or {"error": "trial not found"}, HTTPStatus.OK if detail else HTTPStatus.NOT_FOUND)

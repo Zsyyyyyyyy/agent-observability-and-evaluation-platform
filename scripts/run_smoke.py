@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a temporary Git Worktree and run the Day 2 s20 replay smoke test."""
+"""Create a temporary Git Worktree and run the Day 2 external Agent replay smoke test."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from regression_lab.sandbox import DockerSandbox
 
 REGRESSION = Path(__file__).resolve().parents[1]
 FIXTURE = REGRESSION / "fixtures" / "smoke_calculator"
-WORKER = REGRESSION / "adapters" / "s20" / "worker.py"
+WORKER = REGRESSION / "adapters" / "readonly_replay" / "worker.py"
 
 
 def run(*args: str, cwd: Path) -> None:
@@ -27,7 +27,7 @@ def run(*args: str, cwd: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--s20-source", required=True, help="path to external s20_comprehensive/code.py")
+    parser.add_argument("--replay-source", required=True, help="path to external agent_entry.py")
     parser.add_argument(
         "--docker",
         action="store_true",
@@ -39,9 +39,9 @@ def main() -> int:
         help="include a replayed bash tool call (requires --docker)",
     )
     args = parser.parse_args()
-    s20_source = Path(args.s20_source).expanduser().resolve()
-    if not s20_source.is_file():
-        print(f"s20 source does not exist: {s20_source}", file=sys.stderr)
+    replay_source = Path(args.replay_source).expanduser().resolve()
+    if not replay_source.is_file():
+        print(f"external Agent source does not exist: {replay_source}", file=sys.stderr)
         return 2
     if args.bash and not args.docker:
         print("--bash requires --docker", file=sys.stderr)
@@ -72,11 +72,11 @@ def main() -> int:
     store_path = runtime / "runs.db"
     input_path.write_text(json.dumps({
         "trial_id": "trial_smoke_001",
-        "agent_version": "s20-baseline-replay-v1",
+        "agent_version": "readonly-replay-v1",
         "case_id": "smoke_calculator_empty_input",
         "prompt": "请修复计算器在收到空输入时抛出异常的问题，并运行测试。",
         "worktree": str(worktree),
-        "s20_source": str(s20_source),
+        "replay_source": str(replay_source),
         "test_command": "python -m unittest discover -s tests -v" if args.docker else "python3.11 -m unittest discover -s tests -v",
         "sandbox": {"image": "python:3.11-slim"} if args.docker else None,
         "replay_bash": args.bash,

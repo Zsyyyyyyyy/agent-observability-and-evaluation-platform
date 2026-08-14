@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: inventory_reservation_atomicity
+version: 1
+title: 修复库存批量预留的原子性
+fixture: {path: fixtures/inventory_reservation, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 reserve_all：只有整批请求均合法且库存充足时才能修改调用方传入的 stock；任何后续校验或库存不足失败都必须保持 stock 完全不变。重复 SKU 必须按整批总量判断，但成功返回值仍保持原请求顺序。请理解 src/inventory.py 与 src/service.py 的职责，只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 20000, max_tool_calls: 20, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

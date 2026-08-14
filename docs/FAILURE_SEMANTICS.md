@@ -2,6 +2,15 @@
 
 Regression Lab 不把所有非成功结果混为“失败”。Trial 的状态、Trace 和 Evaluator Evidence 共同解释失败来源。
 
+## 归因与双可靠性视图
+
+每个不通过 Trial 都会获得一个互斥的主归因，按以下优先级确定：`model` → `infrastructure` → `evidence` → `policy` → `agent`。这个顺序确保一个同时出现策略问题与模型网关错误的 Trial 被归因给真正阻断执行的外部失败，而不会在多个桶中重复计数。
+
+- **Raw Reliability**：有效通过 / 全部 Trial。包括 Agent、模型、基础设施、证据链和策略失败；这是唯一用于 Release Gate 的可靠性口径。
+- **Agent Quality**：有效通过 / 排除 `model` 与 `infrastructure` 后的 Trial。它只用于区分“Agent 本身的任务质量”和环境波动，不能用于放宽或覆盖 Gate。
+
+`trace_incomplete`、路径/Diff/工具策略违规不会被排除，因为它们都是 Agent 交付证据或操作边界的一部分。
+
 | 场景 | Trial 状态 | 可定位证据 | 当前验证 |
 |---|---|---|---|
 | 模型网关/鉴权/响应异常 | `model_failed` | `agent_exit_reason=model_error`、`model.call` error Span | `test_model_failure_is_persisted_as_a_distinct_non_passing_trial` |

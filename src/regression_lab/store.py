@@ -51,6 +51,13 @@ class RunStore:
                 )"""
             )
             connection.execute(
+                """CREATE TABLE IF NOT EXISTS attempts (
+                    trial_id TEXT NOT NULL, attempt_id TEXT NOT NULL, trace_id TEXT NOT NULL,
+                    status TEXT NOT NULL, selected INTEGER NOT NULL, result_json TEXT NOT NULL,
+                    recorded_at REAL NOT NULL, PRIMARY KEY (trial_id, attempt_id)
+                )"""
+            )
+            connection.execute(
                 """CREATE TABLE IF NOT EXISTS audit_outbox (
                     audit_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
                     created_at REAL NOT NULL, delivered_at REAL
@@ -113,6 +120,21 @@ class RunStore:
             (audit_id, self._canonical_payload(envelope), recorded_at),
         )
 
+    def _write_attempt(self, connection: sqlite3.Connection, result: dict[str, Any], recorded_at: float) -> None:
+        attempt_id = result.get("attempt_id")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            return
+        trial_id, trace_id, status = self._validate_trial(result)
+        connection.execute("UPDATE attempts SET selected = 0 WHERE trial_id = ?", (trial_id,))
+        connection.execute(
+            """INSERT INTO attempts(trial_id, attempt_id, trace_id, status, selected, result_json, recorded_at)
+               VALUES (?, ?, ?, ?, 1, ?, ?)
+               ON CONFLICT(trial_id, attempt_id) DO UPDATE SET trace_id=excluded.trace_id,
+               status=excluded.status, selected=1, result_json=excluded.result_json,
+               recorded_at=excluded.recorded_at""",
+            (trial_id, attempt_id, trace_id, status, self._canonical_payload(result), recorded_at),
+        )
+
     def record_run(self, result: dict[str, Any], scores: list[dict[str, Any]]) -> None:
         """Atomically commit a Trial, its complete score set, and its audit intent."""
 
@@ -122,19 +144,34 @@ class RunStore:
         with self._connect() as connection:
             self._write_trial(connection, result, recorded_at)
             self._write_scores(connection, trial_id, scores, recorded_at)
+            self._write_attempt(connection, result, recorded_at)
             self._enqueue_audit(
                 connection,
-                {"schema_version": 1, "kind": "trial_recorded", "trial": result, "scores": scores},
+                {"schema_version": 1, "kind": "trial_recorded", "trial": result, "scores": scores,
+                 "attempt_id": result.get("attempt_id"), "selected": bool(result.get("attempt_id"))},
                 recorded_at,
             )
         self.flush_audit_outbox()
+
+    def record_selected_projection(self, result: dict[str, Any], scores: list[dict[str, Any]], selected_attempt_id: str) -> None:
+        """Write a Trial projection selected by the Artifact owner.
+
+        This method never ranks Attempts.  The caller must have resolved the
+        immutable ``selected-attempt.json`` projection first.
+        """
+
+        if result.get("attempt_id") != selected_attempt_id:
+            raise ValueError("selected projection does not match selected attempt id")
+        self.record_run(result, scores)
 
     # Compatibility methods for early scripts. New execution paths use record_run.
     def record_trial(self, result: dict[str, Any]) -> None:
         recorded_at = time.time()
         with self._connect() as connection:
             self._write_trial(connection, result, recorded_at)
-            self._enqueue_audit(connection, {"schema_version": 1, "kind": "trial_recorded", "trial": result}, recorded_at)
+            self._write_attempt(connection, result, recorded_at)
+            self._enqueue_audit(connection, {"schema_version": 1, "kind": "trial_recorded", "trial": result,
+                                              "attempt_id": result.get("attempt_id"), "selected": bool(result.get("attempt_id"))}, recorded_at)
         self.flush_audit_outbox()
 
     def record_scores(self, trial_id: str, scores: list[dict[str, Any]]) -> None:
@@ -191,3 +228,12 @@ class RunStore:
                 "SELECT score_json FROM scores WHERE trial_id = ? ORDER BY evaluator", (trial_id,)
             ).fetchall()
         return [json.loads(row["score_json"]) for row in rows]
+
+    def list_attempts(self, trial_id: str) -> list[dict[str, Any]]:
+        """Return retained physical executions in chronological order."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT result_json FROM attempts WHERE trial_id = ? ORDER BY recorded_at, attempt_id", (trial_id,)
+            ).fetchall()
+        return [json.loads(row["result_json"]) for row in rows]

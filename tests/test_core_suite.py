@@ -16,6 +16,15 @@ MANIFESTS = (
     "cross-file-greeting-case.yaml",
     "merge-settings-case.yaml",
     "deduplicate-tags-case.yaml",
+    "config-inheritance-case.yaml",
+    "dependency-cycle-case.yaml",
+    "batch-isolation-case.yaml",
+    "cache-expiry-case.yaml",
+    "profile-migration-case.yaml",
+    "permission-precedence-case.yaml",
+    "inventory-reservation-case.yaml",
+    "cursor-revision-case.yaml",
+    "webhook-signature-case.yaml",
 )
 
 

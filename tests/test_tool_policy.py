@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from adapters.s20.worker import resolve_tool_policy
+from adapters.readonly_replay.worker import resolve_tool_policy
 
 
 REGRESSION = Path(__file__).resolve().parents[1]

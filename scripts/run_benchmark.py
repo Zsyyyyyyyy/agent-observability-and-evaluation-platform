@@ -10,7 +10,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -23,8 +22,13 @@ from regression_lab.manifest import (
     validate_manifest,
 )
 from regression_lab.adapters import AdapterError, get_adapter
+from regression_lab.attempts import AttemptManager, AttemptPaths
+from regression_lab.attribution import attribute_trial
 from regression_lab.runner import run_with_deadline
 from regression_lab.sandbox import DockerSandbox
+from regression_lab.store import RunStore
+from regression_lab.artifacts import write_json_atomically
+from regression_lab.protocol import file_hash
 
 
 REGRESSION = Path(__file__).resolve().parents[1]
@@ -35,7 +39,8 @@ def git(*args: str, cwd: Path) -> None:
 
 
 def _job_fingerprint(
-    job: dict[str, object], *, adapter_id: str, agent_version: str, use_docker: bool, replay_bash: bool,
+    job: dict[str, object], *, adapter_id: str, agent_version: str, use_docker: bool, replay_bash: bool, external_command: list[str] | None = None,
+    expected_agent_source_hash: str | None = None,
 ) -> str:
     payload = {
         "job": job,
@@ -43,9 +48,21 @@ def _job_fingerprint(
         "agent_version": agent_version,
         "execution_mode": "docker" if use_docker else "unsafe_trusted_host",
         "replay_bash": replay_bash,
+        "external_command": external_command,
+        "expected_agent_source_hash": expected_agent_source_hash,
+        "external_command_source_hash": _external_command_source_hash(external_command),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _external_command_source_hash(command: list[str] | None) -> str | None:
+    """Hash the local external Agent entry point, never its absolute path."""
+
+    if not command:
+        return None
+    candidate = Path(command[-1])
+    return file_hash(candidate) if candidate.is_file() else None
 
 
 def _owned_job_dir(job_dir: Path, job_id: str, fingerprint: str) -> bool:
@@ -59,10 +76,7 @@ def _owned_job_dir(job_dir: Path, job_id: str, fingerprint: str) -> bool:
 
 def _create_job_dir(job_dir: Path, job_id: str, fingerprint: str) -> None:
     job_dir.mkdir(parents=True)
-    (job_dir / "run-manifest.json").write_text(
-        json.dumps({"schema_version": 2, "job_id": job_id, "fingerprint": fingerprint}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json_atomically(job_dir / "run-manifest.json", {"schema_version": 2, "job_id": job_id, "fingerprint": fingerprint})
 
 
 def _timed_out_result(job: dict[str, object], timeout_seconds: int) -> dict[str, object]:
@@ -79,12 +93,69 @@ def _timed_out_result(job: dict[str, object], timeout_seconds: int) -> dict[str,
     }
 
 
+def _is_reusable_result(result: dict[str, object]) -> bool:
+    trace_valid = (result.get("trace_validation") or {}).get("valid") is True
+    evaluation_passed = (result.get("evaluation") or {}).get("passed") is True
+    return result.get("status") == "completed" and evaluation_passed and trace_valid
+
+
+def _attempt_status(result: dict[str, object]) -> str:
+    """Map a worker result to the physical Attempt lifecycle, not Gate success."""
+
+    if result.get("status") == "timed_out":
+        return "timed_out"
+    if result.get("status") == "trace_incomplete":
+        return "invalid"
+    return "completed"
+
+
+def _publish_existing_attempt(job_dir: Path, attempts: AttemptManager) -> dict[str, object] | None:
+    """Restore the Job compatibility result from the selected Attempt projection."""
+
+    selected = attempts.resolve_selected_attempt() or attempts.select_latest_terminal_attempt()
+    if selected is None:
+        return None
+    attempt, result = selected
+    _write_selected_result(job_dir, attempt, result)
+    return result
+
+
+def _sync_selected_store(run_store: Path, attempts: AttemptManager, attempt: AttemptPaths, result: dict[str, object]) -> None:
+    """Publish SQLite only after the Artifact selector has chosen the Trial view."""
+
+    scores = [score for score in result.get("scores", []) if isinstance(score, dict)]
+    RunStore(run_store).record_selected_projection(result, scores, attempt.attempt_id)
+
+
+def _may_retry_model_failure(attempts: AttemptManager, result: dict[str, object], max_retries: int) -> bool:
+    """Allow only bounded retries for a provider-side model failure."""
+
+    if result.get("status") != "model_failed":
+        return False
+    # ``max_retries`` is retries after the initial execution.
+    return len(attempts.list_attempts()) < max_retries + 1
+
+
+def _write_selected_result(job_dir: Path, attempt: AttemptPaths, result: dict[str, object]) -> None:
+    """Publish the selected Attempt through the legacy Job-level result path."""
+
+    selected = {
+        **result,
+        "attempt_id": attempt.attempt_id,
+        "attempt_path": str(attempt.directory),
+    }
+    write_json_atomically(attempt.result, selected)
+    write_json_atomically(job_dir / "result.json", selected)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output-dir", default=str(REGRESSION / ".runtime" / "benchmark"))
     parser.add_argument("--project-root", default=str(REGRESSION))
     parser.add_argument("--trials", type=int)
+    parser.add_argument("--trial-index", type=int, action="append",
+                        help="run only a selected 1-based Trial index; repeatable for orchestration")
     parser.add_argument("--docker", action="store_true", help="run tests and bash in Docker Sandbox (default)")
     parser.add_argument(
         "--unsafe-trusted-host",
@@ -94,17 +165,27 @@ def main() -> int:
     parser.add_argument("--bash", action="store_true", help="include a replayed Docker bash call")
     parser.add_argument("--adapter", default="react-agent", help="registered Agent adapter ID")
     parser.add_argument(
-        "--s20-source",
-        help="path to an external s20_comprehensive/code.py; required only when executing s20-replay",
+        "--replay-source",
+        help="path to an external agent_entry.py; required only when executing readonly-replay",
     )
     parser.add_argument("--agent-version", help="Agent implementation version; defaults to the adapter version")
+    parser.add_argument("--agent-profile", help="optional Agent operating-profile label recorded in the Trial")
+    parser.add_argument("--external-command", help="JSON argv array for external-command, e.g. '[\"python3\", \"/path/agent.py\"]'")
+    parser.add_argument("--expected-agent-source-hash", help="frozen external Agent entry-point hash from the Experiment Protocol")
     parser.add_argument("--resume", action="store_true", help="reuse completed jobs and rerun incomplete jobs")
     parser.add_argument(
         "--rerun-invalid",
         action="store_true",
         help="with --resume, archive completed-but-invalid jobs and execute them again",
     )
+    parser.add_argument(
+        "--rerun-completed",
+        action="store_true",
+        help="with --resume, create a new Attempt for selected completed jobs; preserve prior evidence",
+    )
     parser.add_argument("--dry-run", action="store_true", help="only validate and print expanded jobs")
+    parser.add_argument("--protocol-fingerprint", help="platform-owned Experiment Protocol identity")
+    parser.add_argument("--schedule-index", type=int, help="platform-owned interleaved execution position")
     args = parser.parse_args()
     use_docker = not args.unsafe_trusted_host
     if args.bash and not use_docker:
@@ -114,13 +195,26 @@ def main() -> int:
     except AdapterError as exc:
         parser.error(str(exc))
     agent_version = args.agent_version or adapter.default_version
-    s20_source: Path | None = None
-    if adapter.adapter_id == "s20-replay" and not args.dry_run:
-        if not args.s20_source:
-            parser.error("--s20-source is required when executing the optional s20-replay bridge")
-        s20_source = Path(args.s20_source).expanduser().resolve()
-        if not s20_source.is_file():
-            parser.error(f"s20 source does not exist: {s20_source}")
+    external_command: list[str] | None = None
+    if args.external_command:
+        try:
+            decoded = json.loads(args.external_command)
+        except json.JSONDecodeError as exc:
+            parser.error(f"--external-command must be a JSON argv array: {exc.msg}")
+        if not isinstance(decoded, list) or not decoded or not all(isinstance(item, str) and item for item in decoded):
+            parser.error("--external-command must be a non-empty JSON argv string array")
+        external_command = decoded
+    if adapter.adapter_id == "external-command" and not external_command:
+        parser.error("--adapter external-command requires --external-command")
+    if adapter.adapter_id != "external-command" and external_command:
+        parser.error("--external-command is only valid with --adapter external-command")
+    replay_source: Path | None = None
+    if adapter.adapter_id == "readonly-replay" and not args.dry_run:
+        if not args.replay_source:
+            parser.error("--replay-source is required when executing the optional readonly-replay bridge")
+        replay_source = Path(args.replay_source).expanduser().resolve()
+        if not replay_source.is_file():
+            parser.error(f"external Agent source does not exist: {replay_source}")
 
     manifest_path = Path(args.manifest).resolve()
     try:
@@ -130,6 +224,13 @@ def main() -> int:
             print(json.dumps(validation.as_dict(), ensure_ascii=False, indent=2), file=sys.stderr)
             return 2
         jobs = expand_trials(manifest, args.project_root, args.trials)
+        if args.trial_index:
+            selected = set(args.trial_index)
+            if any(index < 1 for index in selected):
+                raise ManifestError("trial_index must be positive")
+            jobs = [job for job in jobs if int(job["trial_index"]) in selected]
+            if not jobs:
+                raise ManifestError("selected trial_index does not exist in this manifest")
     except (OSError, ManifestError) as exc:
         print(f"MANIFEST ERROR: {exc}", file=sys.stderr)
         return 2
@@ -151,45 +252,66 @@ def main() -> int:
         fingerprint = _job_fingerprint(
             job, adapter_id=adapter.adapter_id, agent_version=agent_version,
             use_docker=use_docker, replay_bash=args.bash,
+            external_command=external_command,
+            expected_agent_source_hash=args.expected_agent_source_hash,
         )
         try:
             job_dir = safe_child_path(output_dir, job["job_id"], "job_id")
         except ManifestError as exc:
             print(f"OUTPUT PATH ERROR: {exc}", file=sys.stderr)
             return 2
-        if job_dir.exists():
+        attempts = AttemptManager(
+            job_dir, job_id=str(job["job_id"]), fingerprint=fingerprint,
+            protocol_fingerprint=args.protocol_fingerprint, schedule_index=args.schedule_index,
+        )
+        existed_before_lock = job_dir.exists()
+        if not existed_before_lock:
+            _create_job_dir(job_dir, str(job["job_id"]), fingerprint)
+        try:
+            attempts.acquire_trial_lock()
+            attempts.recover_orphaned_attempts()
+        except RuntimeError as exc:
+            print(f"TRIAL LOCK ERROR: {exc}", file=sys.stderr)
+            return 2
+        if existed_before_lock:
             if not _owned_job_dir(job_dir, str(job["job_id"]), fingerprint):
                 print(f"REFUSING UNOWNED OUTPUT DIRECTORY: {job_dir}", file=sys.stderr)
+                attempts.release_trial_lock()
                 return 2
             existing_result = job_dir / "result.json"
             if args.resume and existing_result.exists():
-                result = json.loads(existing_result.read_text(encoding="utf-8"))
-                trace_valid = (result.get("trace_validation") or {}).get("valid") is True
-                evaluation_passed = (result.get("evaluation") or {}).get("passed") is True
-                if result.get("status") == "completed" and evaluation_passed and trace_valid:
+                # A prior good Attempt always wins over a later transient
+                # failure only under the legacy selector. Current runs read
+                # the explicit Artifact projection without re-ranking it.
+                result = _publish_existing_attempt(job_dir, attempts) or json.loads(existing_result.read_text(encoding="utf-8"))
+                selected_attempt = attempts.resolve_selected_attempt()
+                if selected_attempt is not None:
+                    _sync_selected_store(run_store, attempts, selected_attempt[0], selected_attempt[1])
+                if _is_reusable_result(result) and not args.rerun_completed:
                     summaries.append(_job_summary(job, result))
+                    attempts.release_trial_lock()
                     continue
-                if result.get("status") == "completed" and not args.rerun_invalid:
+                retry_model_failure = _may_retry_model_failure(attempts, result, int(job.get("max_retries", 0)))
+                # Explicit operator intent may retry any non-reusable evidence
+                # (including timeout); automatic resume remains model-only.
+                retry_invalid_evidence = args.rerun_invalid
+                if not retry_model_failure and not retry_invalid_evidence and not args.rerun_completed:
+                    summaries.append(_job_summary(job, result))
+                    attempts.release_trial_lock()
+                    continue
+                if result.get("status") == "completed" and not (args.rerun_invalid or args.rerun_completed):
                     # Preserve an actual Agent failure as evidence unless the
                     # operator explicitly asks to retry invalid output.
                     summaries.append(_job_summary(job, result))
+                    attempts.release_trial_lock()
                     continue
-            if args.resume:
-                if existing_result.exists() and args.rerun_invalid:
-                    archive_root = output_dir / "invalid-attempts"
-                    archive_root.mkdir(exist_ok=True)
-                    # Keep the archive name inside the same strict identifier
-                    # limit as every runner-owned directory.
-                    archive_name = f"retry_{int(time.time() * 1000)}_{str(job['job_id'])[:32]}"
-                    archive_dir = safe_child_path(archive_root, archive_name, "archive job id")
-                    shutil.move(str(job_dir), str(archive_dir))
-                else:
-                    shutil.rmtree(job_dir)
-            else:
+            if not args.resume:
                 print(f"OUTPUT EXISTS: {job_dir}", file=sys.stderr)
+                attempts.release_trial_lock()
                 return 2
-        _create_job_dir(job_dir, str(job["job_id"]), fingerprint)
-        worktree = job_dir / "worktree"
+
+        attempt = attempts.create_attempt()
+        worktree = attempt.worktree
         shutil.copytree(str(job["fixture_path"]), worktree)
         git("init", cwd=worktree)
         git("config", "user.email", "regression-lab@example.invalid", cwd=worktree)
@@ -203,6 +325,7 @@ def main() -> int:
         spec = {
             "trial_id": str(job["job_id"]),
             "agent_version": agent_version,
+            "agent_profile": args.agent_profile,
             "adapter": adapter.as_spec(),
             "adapter_id": adapter.adapter_id,
             "case_id": job["case_id"],
@@ -218,29 +341,42 @@ def main() -> int:
             "failure_mode": job.get("failure_mode"),
             "budget": job["budget"],
             "max_tokens": job["max_tokens"],
-            "trace_output": str(job_dir / "trace.jsonl"),
-            "result_output": str(job_dir / "result.json"),
-            "run_store": str(run_store),
+            "attempt_id": attempt.attempt_id,
+            "trace_output": str(attempt.trace),
+            "result_output": str(attempt.result),
+            # Worker output is immutable Attempt evidence. The platform writes
+            # the SQLite projection only after selected-attempt.json exists.
+            "run_store": None,
+            "protocol_fingerprint": args.protocol_fingerprint,
+            "schedule_index": args.schedule_index,
+            "expected_agent_source_hash": args.expected_agent_source_hash,
         }
-        if s20_source is not None:
-            spec["s20_source"] = str(s20_source)
-        input_path = job_dir / "trial-input.json"
-        input_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        if external_command is not None:
+            spec["external_command"] = external_command
+        if replay_source is not None:
+            spec["replay_source"] = str(replay_source)
+        input_path = attempt.input
+        write_json_atomically(input_path, spec)
         timeout_seconds = int(job["sandbox"]["timeout_seconds"])
         completed = run_with_deadline(
             [sys.executable, str(adapter.worker_path), "--input", str(input_path)],
             cwd=REGRESSION,
             env={**os.environ, "PYTHONPATH": str(REGRESSION / "src")},
-            timeout_seconds=timeout_seconds,
+            # The external worker owns the Trial deadline and cleans up its
+            # own Agent process group.  Keep a small parent-only margin so it
+            # can persist the terminal Attempt evidence before the hard stop.
+            timeout_seconds=timeout_seconds + 5,
         )
         if completed.stdout:
             print(completed.stdout)
         if completed.stderr:
             print(completed.stderr, file=sys.stderr)
-        result_path = job_dir / "result.json"
+        result_path = attempt.result
         if completed.timed_out:
             result = _timed_out_result(job, timeout_seconds)
-            result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            result["trace_path"] = str(attempt.trace)
+            result["attempt_id"] = attempt.attempt_id
+            write_json_atomically(result_path, result)
         else:
             try:
                 result = json.loads(result_path.read_text(encoding="utf-8"))
@@ -249,32 +385,93 @@ def main() -> int:
                     **_timed_out_result(job, timeout_seconds),
                     "status": "infra_failed",
                     "error": f"worker exited without a valid result: {type(exc).__name__}: {exc}",
+                    "trace_path": str(attempt.trace),
+                    "attempt_id": attempt.attempt_id,
                 }
-                result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        summaries.append(_job_summary(job, result))
+                write_json_atomically(result_path, result)
+        attempts.finish_attempt(attempt, _attempt_status(result), error=result.get("error") if isinstance(result.get("error"), str) else None)
+        if args.protocol_fingerprint:
+            # This identity is injected by the platform rather than accepted
+            # from an Adapter or external Agent output.
+            result["protocol_fingerprint"] = args.protocol_fingerprint
+        if external_command is not None:
+            # The Worker measures this independently before running the Agent;
+            # retain a runner-side value even if the Worker crashes early.
+            result.setdefault("agent_source_hash", _external_command_source_hash(external_command))
+            result["expected_agent_source_hash"] = args.expected_agent_source_hash
+            result["agent_source_hash_matches_protocol"] = (
+                isinstance(args.expected_agent_source_hash, str)
+                and result.get("agent_source_hash") == args.expected_agent_source_hash
+            )
+        if args.schedule_index is not None:
+            result["schedule_index"] = args.schedule_index
+        # The Adapter owns its raw result; the Runner owns protocol identity.
+        # Persist the enriched version before ranking attempts so an Attempt
+        # and its published Job result carry the same frozen identity.
+        write_json_atomically(attempt.result, result)
+        # A newly completed physical execution changes the Trial projection.
+        # Existing projections are only reused during read/resume; they never
+        # suppress publication of a later terminal Attempt.
+        selected = attempts.select_latest_terminal_attempt()
+        if selected is None:
+            selected_result = result
+        else:
+            selected_attempt_paths, selected_result = selected
+            _write_selected_result(job_dir, selected_attempt_paths, selected_result)
+        selected_attempt = attempts.resolve_selected_attempt()
+        if selected_attempt is not None:
+            _sync_selected_store(run_store, attempts, selected_attempt[0], selected_attempt[1])
+        summaries.append(_job_summary(job, selected_result))
+        attempts.release_trial_lock()
 
-    summary = {"manifest": manifest["id"], "job_count": len(jobs), "jobs": summaries}
-    (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary_path = output_dir / "summary.json"
+    prior_jobs: dict[str, dict[str, object]] = {}
+    if summary_path.exists():
+        try:
+            prior = json.loads(summary_path.read_text(encoding="utf-8"))
+            prior_jobs = {str(item.get("job_id")): item for item in prior.get("jobs", []) if isinstance(item, dict) and isinstance(item.get("job_id"), str)}
+        except (OSError, json.JSONDecodeError):
+            prior_jobs = {}
+    prior_jobs.update({str(item["job_id"]): item for item in summaries})
+    merged_jobs = sorted(prior_jobs.values(), key=lambda item: (int(item.get("trial_index", 0)), str(item.get("job_id", ""))))
+    summary = {"manifest": manifest["id"], "job_count": len(merged_jobs), "jobs": merged_jobs}
+    write_json_atomically(summary_path, summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if all(job["status"] == "completed" and job["evaluation_passed"] for job in summaries) else 1
 
 
 def _job_summary(job: dict[str, object], result: dict[str, object]) -> dict[str, object]:
     scores = {score.get("evaluator"): score for score in result.get("scores", []) if isinstance(score, dict)}
+    diff_violations = (scores.get("diff", {}).get("actual", {}) or {}).get("violations", [])
+    actual_diff_policy_violation = any(
+        isinstance(violation, str) and violation != "empty_diff"
+        for violation in diff_violations
+    )
     return {
         "job_id": job["job_id"],
         "case_id": job["case_id"],
         "trial_index": job["trial_index"],
         "status": result.get("status"),
         "evaluation_passed": result.get("evaluation", {}).get("passed", False),
+        "trace_valid": (result.get("trace_validation") or {}).get("valid"),
         "test_passed": scores.get("test", {}).get("passed", False),
+        "path_policy_passed": scores.get("path_policy", {}).get("passed"),
+        # ``empty_diff`` is an expected downstream symptom of a model/infra
+        # failure, not a policy breach. Other DiffEvaluator violations retain
+        # their policy meaning and are eligible for the Gate rate.
+        "diff_policy_violated": actual_diff_policy_violation,
         "tool_calls": scores.get("tool_integrity", {}).get("actual", {}).get("tool_calls", 0),
         "duration_ms": scores.get("budget", {}).get("actual", {}).get("duration_ms", 0),
         "added_lines": scores.get("diff", {}).get("actual", {}).get("added_lines", 0),
         "deleted_lines": scores.get("diff", {}).get("actual", {}).get("deleted_lines", 0),
         "model_tokens": result.get("model_usage", {}).get("total_tokens", 0),
+        "behavior": result.get("behavior"),
+        "failure_attribution": result.get("failure_attribution") or attribute_trial(result),
         "error": result.get("error"),
         "trace_id": result.get("trace_id"),
+        "agent_source_hash": result.get("agent_source_hash"),
+        "expected_agent_source_hash": result.get("expected_agent_source_hash"),
+        "agent_source_hash_matches_protocol": result.get("agent_source_hash_matches_protocol"),
     }
 
 

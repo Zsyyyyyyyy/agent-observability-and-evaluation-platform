@@ -1,0 +1,18 @@
+schema_version: 1
+status: ready
+id: batch_partial_failure_isolation
+version: 1
+title: 修复批处理部分失败隔离
+fixture: {path: fixtures/batch_isolation, language: python, test_command: python -m unittest discover -s tests -v}
+task:
+  prompt: 请修复 process_batch：单条非法记录不能终止整个批次；返回 accepted 与 rejected，rejected 必须保留原始 index 和 parse_record 给出的原因，正常记录顺序不变。只能修改 src/。
+  allowed_paths: [src/**]
+  forbidden_paths: [tests/**]
+execution: {timeout_seconds: 180, max_tokens: 18000, max_tool_calls: 18, max_retries: 1, trials: 1, network: none}
+tool_policy:
+  allow: [read_file, write_file, edit_file, glob, bash]
+  deny: [spawn_teammate, connect_mcp, schedule_cron, create_worktree, remove_worktree, keep_worktree]
+evaluators:
+  required: [test, path_policy, diff, tool_integrity, budget, trace_completeness]
+acceptance:
+  must: [test_exit_code == 0, forbidden_path_changes == 0, result_status == completed]

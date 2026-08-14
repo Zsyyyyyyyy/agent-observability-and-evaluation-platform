@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "agent_id": "external-openai",
+  "display_name": "External OpenAI Coding Agent",
+  "versions": [
+    {
+      "version": "external-openai-v1",
+      "prompt_profile": "direct-repair-v1",
+      "parent_version": null,
+      "status": "archived",
+      "change_type": "config",
+      "change_summary": "Initial direct-repair profile retained as the historical reference point."
+    },
+    {
+      "version": "external-openai-v2",
+      "prompt_profile": "observe-plan-act-verify-v2",
+      "parent_version": "external-openai-v1",
+      "status": "archived",
+      "change_type": "prompt",
+      "change_summary": "Added observe-plan-act-verify guidance; later superseded after a correctness regression in the V1→V2 experiment."
+    },
+    {
+      "version": "external-openai-v3",
+      "prompt_profile": "targeted-context-verify-v3",
+      "parent_version": "external-openai-v2",
+      "status": "champion",
+      "change_type": "prompt",
+      "change_summary": "Introduced targeted context and one-pass verification; retained as the V4/V4.1 comparison baseline."
+    },
+    {
+      "version": "external-openai-v4",
+      "prompt_profile": "success-stop-verify-v4",
+      "parent_version": "external-openai-v3",
+      "status": "rejected",
+      "change_type": "prompt",
+      "change_summary": "Prompt-only success-stop hypothesis; Gate held the pre-experiment because successful runs still expanded after verification."
+    },
+    {
+      "version": "external-openai-v4.1",
+      "prompt_profile": "bounded-success-stop-verify-v4-1",
+      "parent_version": "external-openai-v3",
+      "status": "candidate",
+      "change_type": "mixed",
+      "change_summary": "Bounded verification-stop profile plus a deterministic runtime stop after the exact verification command succeeds; the initial 8-Case promotion was confirmed on the 11-Case benchmark, pending human champion decision."
+    }
+  ]
+}
