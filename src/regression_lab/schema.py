@@ -7,8 +7,41 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from regression_lab.trace import SPAN_TYPES
+
 
 TRACE_KINDS = {"span_start", "span_end", "event"}
+
+_SPAN_TYPE_PREFIXES = (
+    ("agent.", "agent"),
+    ("model.", "llm"),
+    ("llm.", "llm"),
+    ("tool.", "tool"),
+    ("test.", "test"),
+    ("retrieval.", "retrieval"),
+    ("context.", "context"),
+    ("workflow.", "workflow"),
+    ("mcp.", "mcp"),
+)
+
+
+def infer_span_type(name: str) -> str:
+    """Infer a v1 type for v0 spans that did not record one."""
+
+    for prefix, span_type in _SPAN_TYPE_PREFIXES:
+        if name.startswith(prefix):
+            return span_type
+    return "other"
+
+
+def span_type_for(event: dict[str, Any]) -> str:
+    """Return the explicit v1 type or the compatible v0 name inference."""
+
+    span_type = event.get("span_type")
+    if isinstance(span_type, str):
+        return span_type
+    name = event.get("name")
+    return infer_span_type(name) if isinstance(name, str) else "other"
 
 
 @dataclass(frozen=True)
@@ -89,6 +122,10 @@ def validate_events(
                 spans_started.add(span_id)
             if not isinstance(event.get("name"), str) or not event["name"]:
                 errors.append(f"event {index}: span_start requires name")
+            if "span_type" in event and (
+                not isinstance(event["span_type"], str) or event["span_type"] not in SPAN_TYPES
+            ):
+                errors.append(f"event {index}: unsupported span_type {event.get('span_type')!r}")
             parent_id = event.get("parent_span_id")
             if parent_id is None:
                 root_spans.add(str(span_id))
@@ -126,6 +163,8 @@ def validate_events(
 
     if not count:
         errors.append("trace must contain at least one event")
+    if len(root_spans) > 1:
+        errors.append("trace must not contain multiple root spans")
     if expected_trial_id and len(root_spans) != 1:
         errors.append("trial trace must contain exactly one root span")
     for span_id in sorted(spans_started - spans_ended):

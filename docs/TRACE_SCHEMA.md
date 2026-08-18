@@ -1,4 +1,4 @@
-# Trace Schema v0
+# Trace Schema v1
 
 Regression Lab 当前使用依赖无关的 JSONL Trace。每行是一个事件，最小公共字段为：
 
@@ -9,7 +9,26 @@ Regression Lab 当前使用依赖无关的 JSONL Trace。每行是一个事件�
 | `ts` | number | Unix 时间戳 |
 | `kind` | enum | `span_start`、`span_end` 或 `event` |
 
-`span_start` 必须包含 `span_id`、`name` 和 `attributes`；`span_end` 必须包含同名 `span_id`、`status` 和 `attributes`。每个 Span 必须恰好有一个结束事件。普通 `event` 必须包含 `name`，并可通过 `parent_span_id` 关联 Span。
+`span_start` 必须包含 `span_id`、`name` 和 `attributes`；v1 新增 `span_type`，取值为 `agent`、`llm`、`tool`、`test`、`retrieval`、`context`、`workflow`、`mcp` 或 `other`。`span_end` 必须包含同名 `span_id`、`status` 和 `attributes`。每个 Span 必须恰好有一个结束事件；一个 Trace 至多只能有一个根 Span。普通 `event` 必须包含 `name`，并可通过 `parent_span_id` 关联 Span。
+
+## 嵌套 Span
+
+SDK 使用当前上下文自动关联父 Span：
+
+```python
+with observer.run():
+    with observer.span("agent.step", "agent"):
+        with observer.model_call(model="example-model"):
+            pass
+        with observer.tool_call("edit_file"):
+            pass
+```
+
+上述调用会形成 `agent.run → agent.step → model.call/tool.call` 的树。`model_call()` 与 `tool_call()` 分别是 `span(..., "llm")`、`span(..., "tool")` 的语法糖。
+
+## v0 兼容性
+
+旧 Trace 可以没有 `span_type`，仍然合法。读取方会按名称前缀推断类型：`agent.`、`model.`/`llm.`、`tool.`、`test.`、`retrieval.`、`context.`、`workflow.`、`mcp.`；不能推断时视为 `other`。因此既有实验报告和 Gate 无需迁移。
 
 校验入口：
 

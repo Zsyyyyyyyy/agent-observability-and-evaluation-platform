@@ -148,9 +148,11 @@ def _simple_yaml(text: str) -> dict[str, Any]:
     return parsed
 
 
-def load_manifest(path: str | Path) -> dict[str, Any]:
-    manifest_path = Path(path).resolve()
-    text = manifest_path.read_text(encoding="utf-8")
+def load_mapping_document(path: str | Path, *, document_name: str) -> dict[str, Any]:
+    """Load the small YAML/JSON mapping format shared by local configs."""
+
+    document_path = Path(path).resolve()
+    text = document_path.read_text(encoding="utf-8")
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
@@ -161,7 +163,13 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
         else:
             parsed = yaml.safe_load(text)
     if not isinstance(parsed, dict):
-        raise ManifestError("manifest root must be a map")
+        raise ManifestError(f"{document_name} root must be a map")
+    return parsed
+
+
+def load_manifest(path: str | Path) -> dict[str, Any]:
+    manifest_path = Path(path).resolve()
+    parsed = load_mapping_document(manifest_path, document_name="manifest")
     parsed["_manifest_path"] = str(manifest_path)
     return parsed
 

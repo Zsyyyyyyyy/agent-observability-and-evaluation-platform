@@ -27,7 +27,7 @@ def probe_command(manifest: str, case_dir: Path) -> list[str]:
     ]
 
 
-def relocated_case_dir(output: Path, manifest: str) -> Path:
+def relocated_case_dir(output: Path, manifest: str, retry: int = 0) -> Path:
     """Allocate a separate namespace after a repository relocation.
 
     A Trial fingerprint intentionally includes its resolved fixture path.  An
@@ -37,7 +37,8 @@ def relocated_case_dir(output: Path, manifest: str) -> Path:
     """
 
     workspace_id = hashlib.sha256(str(ROOT.resolve()).encode("utf-8")).hexdigest()[:12]
-    return output / f"workspace-{workspace_id}" / manifest.removesuffix(".yaml")
+    namespace = f"workspace-{workspace_id}" if retry == 0 else f"workspace-{workspace_id}-{retry + 1}"
+    return output / namespace / manifest.removesuffix(".yaml")
 
 
 def probe_passed(
@@ -75,9 +76,11 @@ def main() -> int:
     for manifest, (expected_status, expected_failed_score) in EXPECTATIONS.items():
         case_dir = output / manifest.removesuffix(".yaml")
         completed = subprocess.run(probe_command(manifest, case_dir), cwd=ROOT, capture_output=True, text=True, check=False)
-        if completed.returncode == 2 and "REFUSING UNOWNED OUTPUT DIRECTORY" in completed.stderr:
-            case_dir = relocated_case_dir(output, manifest)
+        retry = 0
+        while completed.returncode == 2 and "REFUSING UNOWNED OUTPUT DIRECTORY" in completed.stderr and retry < 100:
+            case_dir = relocated_case_dir(output, manifest, retry)
             completed = subprocess.run(probe_command(manifest, case_dir), cwd=ROOT, capture_output=True, text=True, check=False)
+            retry += 1
         result_path = next(case_dir.rglob("result.json"), None)
         result = json.loads(result_path.read_text(encoding="utf-8")) if result_path else {}
         passed = probe_passed(completed.returncode, result, expected_status, expected_failed_score)

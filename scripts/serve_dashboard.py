@@ -29,6 +29,11 @@ def handler_for(repository: DashboardRepository, static_root: Path):
             self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
+        def end_headers(self) -> None:
+            # Console 直接读取本地源码；禁止缓存，避免刷新后继续执行旧的前端格式化逻辑。
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
         def do_GET(self) -> None:
             path = urlparse(self.path).path
             if path == "/api/dashboard": return self._json(repository.dashboard())

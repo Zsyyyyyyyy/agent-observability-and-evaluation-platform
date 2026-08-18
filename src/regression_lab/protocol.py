@@ -135,7 +135,9 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
                    schedule_seed: int = DEFAULT_SCHEDULE_SEED,
                    comparison_intent: str = "prompt_profile_only",
                    allowed_differences: Iterable[str] = ("agents[].prompt_profile",),
-                   prompt_profiles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+                   prompt_profiles: dict[str, dict[str, str]] | None = None,
+                   adapter_capabilities: dict[str, object] | None = None,
+                   agent_snapshots: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """Build a protocol snapshot from explicit experiment inputs only.
 
     Environment collection is deliberately narrow: model identity is useful,
@@ -147,17 +149,23 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
     source_hashes = _source_hashes(adapter, external_command)
     profile_source_hash = source_hashes.get(Path(external_command[-1]).name) if external_command else None
     prompt_profiles = prompt_profiles or {}
+    agent_snapshots = agent_snapshots or {}
     protocol_agents = []
     for item in agents:
         descriptor = prompt_profiles.get(item["version"], {})
+        snapshot = agent_snapshots.get(item["id"])
+        entrypoint_hash = snapshot.get("entrypoint_hash") if isinstance(snapshot, dict) else None
         protocol_agents.append({
             "label": item["id"], "version": item["version"], "adapter": adapter,
-            "agent_source_hash": profile_source_hash,
+            "agent_source_hash": entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
             "prompt_profile": descriptor.get("profile_id", item["version"]),
-            "prompt_profile_source_hash": profile_source_hash,
+            "prompt_profile_source_hash": entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
             # The Agent protocol-description handshake hashes the final system
             # prompts rendered for every Case, without persisting their text.
             "rendered_prompt_set_hash": descriptor.get("rendered_prompt_set_hash", "unavailable"),
+            # AgentSpec is the A/B identity evidence.  The command bridge is
+            # only an execution detail and must not become that identity.
+            **({"agent_spec_snapshot": snapshot} if isinstance(snapshot, dict) else {}),
         })
     protocol: dict[str, Any] = {
         "schema_version": PROTOCOL_SCHEMA_VERSION,
@@ -181,6 +189,7 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
         },
         "platform_source_hashes": source_hashes,
         "trace_schema_version": 1,
+        "adapter_capabilities": adapter_capabilities,
     }
     protocol = _redact(protocol)
     protocol["protocol_fingerprint"] = protocol_fingerprint(protocol)
@@ -193,7 +202,7 @@ def compare_protocols(previous: dict[str, Any], current: dict[str, Any]) -> dict
     if protocol_fingerprint(previous) == protocol_fingerprint(current):
         return {"level": "strict", "differences": []}
     differences = []
-    for field in ("comparison_intent", "allowed_differences", "benchmark", "model", "execution", "sandbox", "platform", "platform_source_hashes", "trace_schema_version"):
+    for field in ("comparison_intent", "allowed_differences", "benchmark", "model", "execution", "sandbox", "platform", "platform_source_hashes", "trace_schema_version", "adapter_capabilities"):
         if previous.get(field) != current.get(field):
             differences.append(field)
     if previous.get("agents") != current.get("agents"):

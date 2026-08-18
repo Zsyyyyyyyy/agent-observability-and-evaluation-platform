@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "regression-lab"
+version = "1.0.0"
+description = "Framework-neutral Agent regression evaluation and observability platform"
+requires-python = ">=3.11"
+
+[project.scripts]
+regression-lab = "scripts.regression_lab:main"
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["regression_lab*", "scripts"]

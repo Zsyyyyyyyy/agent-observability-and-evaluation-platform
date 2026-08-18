@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from regression_lab.protocol import build_execution_plan, build_protocol, compare_protocols, protocol_fingerprint
-from scripts.run_experiment import _attempt_source_comparability, describe_prompt_profiles
+from scripts.run_experiment import _attempt_source_comparability, describe_prompt_profiles, parse_external_arm_configs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +52,55 @@ class ProtocolTests(unittest.TestCase):
             before = build_protocol(**common, comparison_intent="prompt_profile_only")
             after = build_protocol(**common, comparison_intent="runtime_policy", allowed_differences=("agents[].runtime_policy",))
         self.assertEqual(compare_protocols(before, after), {"level": "not_comparable", "differences": ["comparison_intent", "allowed_differences"]})
+
+    def test_protocol_freezes_external_agent_evidence_capabilities(self):
+        with TemporaryDirectory() as directory:
+            manifest = self._manifest(Path(directory))
+            common = dict(
+                manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                adapter="external-command", external_command=["python", "agent.py"], trials=3, use_docker=True, bash=False,
+            )
+            declared = {
+                "schema_version": 2, "trace": True, "hierarchical_trace": True, "model_usage": True,
+                "tool_trace": True, "tool_semantics": True, "test_trace": False, "context_trace": False,
+                "workflow_trace": True, "mcp_trace": False,
+            }
+            before = build_protocol(**common, adapter_capabilities=declared)
+            after = build_protocol(**common, adapter_capabilities={**declared, "workflow_trace": False})
+        self.assertEqual(before["adapter_capabilities"], declared)
+        self.assertEqual(compare_protocols(before, after), {"level": "not_comparable", "differences": ["adapter_capabilities"]})
+
+    def test_protocol_preserves_per_arm_agent_spec_snapshots(self):
+        with TemporaryDirectory() as directory:
+            manifest = self._manifest(Path(directory))
+            snapshot = {
+                "agent_id": "demo", "version": "v1", "observation_mode": "blackbox",
+                "normalized_command": ["python", "agent.py"], "capabilities": {"trace": True},
+                "agent_spec_hash": "sha256:spec", "entrypoint_hash": "sha256:entrypoint",
+                "source_scope": "entrypoint_only",
+            }
+            protocol = build_protocol(
+                manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                adapter="external-command", external_command=None, trials=3, use_docker=True, bash=False,
+                agent_snapshots={"baseline": snapshot},
+            )
+        baseline = next(item for item in protocol["agents"] if item["label"] == "baseline")
+        self.assertEqual(baseline["agent_source_hash"], "sha256:entrypoint")
+        self.assertEqual(baseline["agent_spec_snapshot"], snapshot)
+
+    def test_per_arm_external_configs_keep_sdk_and_blackbox_capabilities_distinct(self):
+        capabilities = {
+            "schema_version": 2, "trace": True, "hierarchical_trace": True, "model_usage": True,
+            "tool_trace": True, "tool_semantics": True, "test_trace": False, "context_trace": False,
+            "workflow_trace": False, "mcp_trace": False,
+        }
+        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        configs = parse_external_arm_configs(json.dumps({
+            "baseline": {"external_command": ["python", "baseline.py"], "adapter_capabilities": capabilities, "observation_mode": "sdk"},
+            "candidate": {"external_command": ["python", "candidate.py"], "adapter_capabilities": capabilities, "observation_mode": "sdk"},
+        }), agents)
+        self.assertEqual(configs["baseline"]["external_command"], ["python", "baseline.py"])
+        self.assertEqual(configs["candidate"]["observation_mode"], "sdk")
 
     def test_protocol_freezes_explicit_sampling_defaults_and_rendered_prompt_hashes(self):
         with TemporaryDirectory() as directory, mock.patch.dict(

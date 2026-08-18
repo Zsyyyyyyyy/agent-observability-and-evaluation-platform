@@ -21,9 +21,11 @@ from regression_lab.manifest import (
     safe_child_path,
     validate_manifest,
 )
-from regression_lab.adapters import AdapterError, get_adapter
+from regression_lab.adapters import AdapterCapabilities, AdapterError, get_adapter
 from regression_lab.attempts import AttemptManager, AttemptPaths
 from regression_lab.attribution import attribute_trial
+from regression_lab.behavior import summarize_trial_behavior
+from regression_lab.behavior_diff import snapshot_trial_behavior
 from regression_lab.runner import run_with_deadline
 from regression_lab.sandbox import DockerSandbox
 from regression_lab.store import RunStore
@@ -40,7 +42,8 @@ def git(*args: str, cwd: Path) -> None:
 
 def _job_fingerprint(
     job: dict[str, object], *, adapter_id: str, agent_version: str, use_docker: bool, replay_bash: bool, external_command: list[str] | None = None,
-    expected_agent_source_hash: str | None = None,
+    expected_agent_source_hash: str | None = None, adapter_capabilities: dict[str, object] | None = None,
+    external_observation_mode: str = "sdk",
 ) -> str:
     payload = {
         "job": job,
@@ -50,6 +53,8 @@ def _job_fingerprint(
         "replay_bash": replay_bash,
         "external_command": external_command,
         "expected_agent_source_hash": expected_agent_source_hash,
+        "adapter_capabilities": adapter_capabilities,
+        "external_observation_mode": external_observation_mode,
         "external_command_source_hash": _external_command_source_hash(external_command),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -61,8 +66,8 @@ def _external_command_source_hash(command: list[str] | None) -> str | None:
 
     if not command:
         return None
-    candidate = Path(command[-1])
-    return file_hash(candidate) if candidate.is_file() else None
+    candidate = next((Path(argument) for argument in reversed(command) if Path(argument).is_file()), None)
+    return file_hash(candidate) if candidate else None
 
 
 def _owned_job_dir(job_dir: Path, job_id: str, fingerprint: str) -> bool:
@@ -171,6 +176,11 @@ def main() -> int:
     parser.add_argument("--agent-version", help="Agent implementation version; defaults to the adapter version")
     parser.add_argument("--agent-profile", help="optional Agent operating-profile label recorded in the Trial")
     parser.add_argument("--external-command", help="JSON argv array for external-command, e.g. '[\"python3\", \"/path/agent.py\"]'")
+    parser.add_argument("--adapter-capabilities", help="Evidence Capability JSON snapshot for an external-command Agent")
+    parser.add_argument(
+        "--external-observation-mode", choices=("sdk", "blackbox"), default="sdk",
+        help="external-command evidence mode; sdk remains the legacy default",
+    )
     parser.add_argument("--expected-agent-source-hash", help="frozen external Agent entry-point hash from the Experiment Protocol")
     parser.add_argument("--resume", action="store_true", help="reuse completed jobs and rerun incomplete jobs")
     parser.add_argument(
@@ -208,6 +218,19 @@ def main() -> int:
         parser.error("--adapter external-command requires --external-command")
     if adapter.adapter_id != "external-command" and external_command:
         parser.error("--external-command is only valid with --adapter external-command")
+    if adapter.adapter_id != "external-command" and args.external_observation_mode != "sdk":
+        parser.error("--external-observation-mode is only valid with --adapter external-command")
+    adapter_capabilities = adapter.evidence_capabilities
+    if args.adapter_capabilities:
+        if adapter.adapter_id != "external-command":
+            parser.error("--adapter-capabilities is only valid with --adapter external-command")
+        try:
+            declared_capabilities = json.loads(args.adapter_capabilities)
+        except json.JSONDecodeError as exc:
+            parser.error(f"--adapter-capabilities must be a JSON object: {exc.msg}")
+        adapter_capabilities = AdapterCapabilities.from_snapshot(declared_capabilities)
+        if adapter_capabilities is None:
+            parser.error("--adapter-capabilities must provide every AdapterCapabilities boolean field")
     replay_source: Path | None = None
     if adapter.adapter_id == "readonly-replay" and not args.dry_run:
         if not args.replay_source:
@@ -254,6 +277,8 @@ def main() -> int:
             use_docker=use_docker, replay_bash=args.bash,
             external_command=external_command,
             expected_agent_source_hash=args.expected_agent_source_hash,
+            adapter_capabilities=adapter_capabilities.as_dict(),
+            external_observation_mode=args.external_observation_mode,
         )
         try:
             job_dir = safe_child_path(output_dir, job["job_id"], "job_id")
@@ -328,11 +353,15 @@ def main() -> int:
             "agent_profile": args.agent_profile,
             "adapter": adapter.as_spec(),
             "adapter_id": adapter.adapter_id,
+            "adapter_capabilities": adapter_capabilities.as_dict(),
+            "observation_mode": args.external_observation_mode if adapter.adapter_id == "external-command" else None,
             "case_id": job["case_id"],
             "prompt": job["prompt"],
             "worktree": str(worktree),
             "test_command": test_command,
             "sandbox": {**job["sandbox"], "image": "python:3.11-slim"} if use_docker else None,
+            # Docker 只决定测试隔离方式；Trial 时限始终来自 Benchmark。
+            "trial_timeout_seconds": int(job["sandbox"]["timeout_seconds"]),
             "replay_bash": args.bash,
             "allowed_paths": job["allowed_paths"],
             "forbidden_paths": job["forbidden_paths"],
@@ -405,6 +434,9 @@ def main() -> int:
             )
         if args.schedule_index is not None:
             result["schedule_index"] = args.schedule_index
+        result.setdefault("adapter_id", adapter.adapter_id)
+        result.setdefault("adapter_capabilities", adapter_capabilities.as_dict())
+        result["behavior"] = summarize_trial_behavior(result)
         # The Adapter owns its raw result; the Runner owns protocol identity.
         # Persist the enriched version before ranking attempts so an Attempt
         # and its published Job result carry the same frozen identity.
@@ -447,6 +479,15 @@ def _job_summary(job: dict[str, object], result: dict[str, object]) -> dict[str,
         isinstance(violation, str) and violation != "empty_diff"
         for violation in diff_violations
     )
+    capabilities = AdapterCapabilities.from_snapshot(result.get("adapter_capabilities"))
+    behavior = result.get("behavior") if isinstance(result.get("behavior"), dict) else summarize_trial_behavior(result)
+    # 外部 black-box 仍会有平台生命周期 Trace，但这不能伪装成工具或模型证据。
+    tool_calls = scores.get("tool_integrity", {}).get("actual", {}).get("tool_calls", 0)
+    model_tokens = result.get("model_usage", {}).get("total_tokens", 0)
+    if capabilities is not None and not capabilities.tool_trace:
+        tool_calls = None
+    if capabilities is not None and not capabilities.model_usage:
+        model_tokens = None
     return {
         "job_id": job["job_id"],
         "case_id": job["case_id"],
@@ -460,12 +501,15 @@ def _job_summary(job: dict[str, object], result: dict[str, object]) -> dict[str,
         # failure, not a policy breach. Other DiffEvaluator violations retain
         # their policy meaning and are eligible for the Gate rate.
         "diff_policy_violated": actual_diff_policy_violation,
-        "tool_calls": scores.get("tool_integrity", {}).get("actual", {}).get("tool_calls", 0),
+        "tool_calls": tool_calls,
         "duration_ms": scores.get("budget", {}).get("actual", {}).get("duration_ms", 0),
         "added_lines": scores.get("diff", {}).get("actual", {}).get("added_lines", 0),
         "deleted_lines": scores.get("diff", {}).get("actual", {}).get("deleted_lines", 0),
-        "model_tokens": result.get("model_usage", {}).get("total_tokens", 0),
-        "behavior": result.get("behavior"),
+        "model_tokens": model_tokens,
+        "adapter_id": result.get("adapter_id"),
+        "adapter_capabilities": result.get("adapter_capabilities"),
+        "behavior": behavior,
+        "behavior_snapshot": snapshot_trial_behavior(result),
         "failure_attribution": result.get("failure_attribution") or attribute_trial(result),
         "error": result.get("error"),
         "trace_id": result.get("trace_id"),

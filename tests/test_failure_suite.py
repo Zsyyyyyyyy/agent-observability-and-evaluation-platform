@@ -40,3 +40,4 @@ class FailureSuiteTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first.name, "failure-path-violation")
         self.assertTrue(first.parent.name.startswith("workspace-"))
+        self.assertNotEqual(first, failure_suite.relocated_case_dir(root, "failure-path-violation.yaml", retry=1))

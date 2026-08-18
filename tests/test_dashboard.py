@@ -12,7 +12,7 @@ class DashboardRepositoryTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory); trial = root / "baseline" / "case"; trial.mkdir(parents=True)
             trace = trial / "trace.jsonl"; trace.write_text('{"kind":"event","name":"agent.stop"}\n', encoding="utf-8")
-            result = {"trial_id": "case_trial_001", "status": "completed", "agent_version": "v1", "trace_path": str(trace), "evaluation": {"passed": True}, "failure_attribution": {"kind": "passed", "reason": "valid_platform_evidence"}, "model_usage": {"total_tokens": 12}, "behavior": {"tool_success_rate": 1.0, "tool_error_rate": 0.0, "denied_tool_attempts": 0, "availability": {"tool_outcomes": True}}, "scores": [{"evaluator": "budget", "actual": {"duration_ms": 10}}, {"evaluator": "tool_integrity", "actual": {"tool_calls": 2}}]}
+            result = {"trial_id": "case_trial_001", "adapter_id": "react-agent", "status": "completed", "agent_version": "v1", "trace_path": str(trace), "evaluation": {"passed": True}, "failure_attribution": {"kind": "passed", "reason": "valid_platform_evidence", "failure_span": None, "evidence": {}}, "model_usage": {"total_tokens": 12}, "behavior": {"tool_success_rate": 1.0, "tool_error_rate": 0.0, "denied_tool_attempts": 0, "availability": {"tool_outcomes": True}}, "scores": [{"evaluator": "budget", "actual": {"duration_ms": 10}}, {"evaluator": "tool_integrity", "actual": {"tool_calls": 2}}]}
             (trial / "result.json").write_text(json.dumps(result), encoding="utf-8")
             nested = trial / "attempts" / "attempt_001"; nested.mkdir(parents=True)
             (nested / "result.json").write_text(json.dumps({**result, "status": "trace_incomplete"}), encoding="utf-8")
@@ -25,10 +25,12 @@ class DashboardRepositoryTests(unittest.TestCase):
             self.assertEqual(dashboard["trace_incomplete_count"], 0)
             self.assertEqual(dashboard["trial_count"], 1)
             self.assertEqual(dashboard["runtime_label"], f"Local experiment artifacts · {root.name}")
-            self.assertEqual(dashboard["behavior"]["tool_success_rate"], 1.0)
+            self.assertIsNone(dashboard["behavior"]["tool_success_rate"])
             self.assertNotIn(str(root), dashboard["runtime_label"])
             self.assertEqual(repo.trials()[0]["case_id"], "case")
             self.assertEqual(repo.trials()[0]["failure_reason"], "valid_platform_evidence")
+            self.assertIsNone(repo.trials()[0]["behavior_snapshot"]["tool_calls"])
+            self.assertEqual(repo.trials()[0]["evidence_availability"]["tool_trace"], "supported_but_not_observed")
             self.assertEqual(repo.trials()[0]["id"], "baseline/case")
             self.assertEqual(repo.trial("baseline/case")["trace"][0]["name"], "agent.stop")
             self.assertIsNone(repo.trial("../../etc"))
@@ -50,6 +52,33 @@ class DashboardRepositoryTests(unittest.TestCase):
         self.assertEqual(evidence["policy_stop_trace_count"], 1)
         self.assertEqual(evidence["post_stop_model_or_tool_spans"], 0)
         self.assertEqual(evidence["missing_policy_stop_count"], 0)
+
+    def test_blackbox_dashboard_metrics_remain_unavailable(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory); trial = root / "blackbox" / "case"; trial.mkdir(parents=True)
+            trace = trial / "trace.jsonl"; trace.write_text('{"kind":"event","name":"agent.run"}\n', encoding="utf-8")
+            result = {
+                "trial_id": "case_trial_001", "adapter_id": "external-command", "status": "completed",
+                "agent_version": "v1", "trace_path": str(trace), "evaluation": {"passed": True},
+                "model_usage": {"total_tokens": 0},
+                "adapter_capabilities": {
+                    "schema_version": 2, "trace": True, "hierarchical_trace": False, "model_usage": False,
+                    "tool_trace": False, "tool_semantics": False, "test_trace": False, "context_trace": False,
+                    "workflow_trace": False, "mcp_trace": False,
+                },
+                "scores": [
+                    {"evaluator": "budget", "actual": {"duration_ms": 10}},
+                    {"evaluator": "tool_integrity", "actual": {"tool_calls": 0}},
+                ],
+            }
+            (trial / "result.json").write_text(json.dumps(result), encoding="utf-8")
+            repo = DashboardRepository(root)
+
+            row = repo.trials()[0]
+            self.assertIsNone(row["tool_calls"])
+            self.assertIsNone(row["model_tokens"])
+            self.assertIsNone(repo.dashboard()["avg_tool_calls"])
+            self.assertIsNone(repo.dashboard()["avg_model_tokens"])
 
     def test_latest_gate_reads_negative_control_decision(self):
         with TemporaryDirectory() as directory:

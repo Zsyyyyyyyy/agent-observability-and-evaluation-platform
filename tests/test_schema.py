@@ -3,7 +3,7 @@ import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from regression_lab.schema import validate_events, validate_trace
+from regression_lab.schema import span_type_for, validate_events, validate_trace
 
 
 def event(seq, kind, **fields):
@@ -66,6 +66,18 @@ class TraceSchemaTests(unittest.TestCase):
         validation = validate_events(records, expected_trial_id="new", expected_root_attributes={"adapter_id": "external-command", "agent_version": "v1"})
         self.assertFalse(validation.valid)
         self.assertTrue(any("adapter_id" in error for error in validation.errors))
+
+    def test_v0_span_type_is_inferred_and_invalid_v1_type_is_rejected(self):
+        legacy = event(1, "span_start", span_id="root", parent_span_id=None, name="model.call", attributes={})
+        invalid = event(2, "span_start", span_id="child", parent_span_id="root", name="agent.step", span_type="model", attributes={})
+        records = [legacy, invalid, event(3, "span_end", span_id="child", status="ok", attributes={}), event(4, "span_end", span_id="root", status="ok", attributes={})]
+
+        validation = validate_events(records)
+
+        self.assertEqual(span_type_for(legacy), "llm")
+        self.assertEqual(span_type_for({"name": "custom.operation"}), "other")
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("unsupported span_type" in error for error in validation.errors))
 
 
 if __name__ == "__main__":

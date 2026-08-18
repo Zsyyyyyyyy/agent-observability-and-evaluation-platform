@@ -2,9 +2,12 @@ PYTHON ?= python3.11
 PYTHONPATH_VALUE := src:.
 RUNTIME ?= .runtime/core-experiment-v1
 REAL_OUTPUT_DIR ?= .runtime/react-smoke
+LANGGRAPH_PYTHON ?= .runtime/langgraph-integration-venv/bin/python
+CONSOLE_HOST ?= 127.0.0.1
+CONSOLE_PORT ?= 8765
 
 .DEFAULT_GOAL := help
-.PHONY: help test docker-test manifest-check replay-dry-run real-smoke external-real-smoke external-experiment external-evolution external-statistical-evolution external-v4-preexperiment external-v4-1-preexperiment external-v4-1-benchmark audit-v4-1-benchmark external-v4-1-benchmark-v2 external-v4-1-benchmark-v2-gate audit-v4-1-benchmark-v2 external-three-arm-benchmark external-three-arm-gates audit-three-arm-benchmark external-v3-negative-control external-v3-negative-gate audit-v3-negative-control external-v3-negative-control-v2 external-v3-negative-gate-v2 audit-v3-negative-control-v2 external-v3-negative-control-benchmark-v2 external-v3-negative-control-benchmark-v2-gate audit-v3-negative-control-benchmark-v2 apply-external-lineage console experiment-report gate failure-suite
+.PHONY: help test docker-test manifest-check replay-dry-run real-smoke external-real-smoke langgraph-integration external-experiment external-evolution external-statistical-evolution external-v4-preexperiment external-v4-1-preexperiment external-v4-1-benchmark audit-v4-1-benchmark-v2 external-v4-1-benchmark-v2-gate audit-v4-1-benchmark-v2 external-three-arm-benchmark external-three-arm-gates audit-three-arm-benchmark external-v3-negative-control external-v3-negative-gate audit-v3-negative-control-v2 external-v3-negative-gate-v2 audit-v3-negative-control-v2 external-v3-negative-control-benchmark-v2 external-v3-negative-control-benchmark-v2-gate audit-v3-negative-control-benchmark-v2 apply-external-lineage console experiment-report gate failure-suite
 
 help:
 	@printf '%s\n' 'Targets:' \
@@ -17,6 +20,7 @@ help:
 	  '  make failure-suite     Run deterministic expected-failure probes in Docker.' \
 	  '  make real-smoke        Run one real react-agent trial (requires model env).' \
 	  '  make external-real-smoke Run one real framework-neutral Agent trial (requires model env).' \
+	  '  make langgraph-integration Run the local 3-case LangGraph external-command integration.' \
 	  '  make external-experiment Run 3-case v1/v2 external-Agent experiment (requires model env).' \
 	  '  make external-evolution Run the next 3-case v2/v3 external-Agent experiment (requires model env).' \
 	  '  make external-statistical-evolution Run 8-case v2/v3 repeated experiment for statistical evidence.' \
@@ -58,6 +62,20 @@ external-real-smoke:
 	  --adapter external-command --agent-version external-openai-v1 \
 	  --external-command '["$(PYTHON)", "$(CURDIR)/examples/external_openai_agent.py"]' \
 	  --manifest benchmarks/smoke-case-design.yaml --output-dir .runtime/external-openai-smoke --resume
+
+langgraph-integration:
+	@test -x "$(LANGGRAPH_PYTHON)" || (echo 'Install examples/langgraph-requirements.txt into $(LANGGRAPH_PYTHON) first.' >&2; exit 2)
+	PYTHONPATH=src:. $(PYTHON) scripts/run_experiment.py \
+	  --adapter external-command \
+	  --external-command '["$(CURDIR)/$(LANGGRAPH_PYTHON)", "$(CURDIR)/examples/langgraph_coding_agent.py"]' \
+	  --adapter-capabilities '{"schema_version":2,"trace":true,"hierarchical_trace":true,"model_usage":true,"tool_trace":true,"tool_semantics":true,"test_trace":false,"context_trace":false,"workflow_trace":true,"mcp_trace":false}' \
+	  --agents baseline:langgraph-agent-v1,candidate:langgraph-agent-v2 \
+	  --trials 3 --schedule-seed 20260816 --unsafe-trusted-host \
+	  --comparison-intent duplicate_read_elision \
+	  --output-dir .runtime/langgraph-v1-v2-integration-v2 \
+	  --manifest benchmarks/smoke-case-design.yaml \
+	  --manifest benchmarks/normalize-case-design.yaml \
+	  --manifest benchmarks/parse-port-case.yaml
 
 external-experiment:
 	@test -n "$(AGENT_API_KEY)" || (echo 'AGENT_API_KEY is required.' >&2; exit 2)
@@ -361,4 +379,4 @@ failure-suite:
 	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/run_failure_suite.py
 
 console:
-	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/serve_dashboard.py --runtime $(RUNTIME)
+	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/serve_dashboard.py --runtime $(RUNTIME) --host $(CONSOLE_HOST) --port $(CONSOLE_PORT)

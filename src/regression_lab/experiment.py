@@ -9,6 +9,7 @@ from statistics import mean, median
 from typing import Any, Iterable
 
 from regression_lab.behavior import aggregate_behavior
+from regression_lab.behavior_diff import behavior_deltas
 from regression_lab.attribution import aggregate_attribution
 
 
@@ -74,6 +75,7 @@ def _metrics(summary: dict[str, Any]) -> dict[str, float | None]:
     diff_violations = sum(job.get("diff_policy_violated") is True for job in jobs)
     durations = _numbers(jobs, "duration_ms")
     tokens = _numbers(jobs, "model_tokens")
+    tool_calls = _numbers(jobs, "tool_calls")
     return {
         "trial_count": float(len(jobs)),
         "completion_rate": completed / count,
@@ -84,11 +86,11 @@ def _metrics(summary: dict[str, Any]) -> dict[str, float | None]:
         "infra_failed_rate": infra_failed / count,
         "path_policy_violation_rate": path_violations / count,
         "diff_policy_violation_rate": diff_violations / count,
-        "avg_tool_calls": mean(_numbers(jobs, "tool_calls")) if _numbers(jobs, "tool_calls") else 0.0,
+        "avg_tool_calls": mean(tool_calls) if tool_calls else None,
         "avg_duration_ms": mean(durations) if durations else 0.0,
         "avg_added_lines": mean(_numbers(jobs, "added_lines")) if _numbers(jobs, "added_lines") else 0.0,
         "avg_deleted_lines": mean(_numbers(jobs, "deleted_lines")) if _numbers(jobs, "deleted_lines") else 0.0,
-        "avg_model_tokens": mean(tokens) if tokens else 0.0,
+        "avg_model_tokens": mean(tokens) if tokens else None,
         "p50_duration_ms": median(durations) if durations else None,
         "p95_duration_ms": _nearest_rank(durations, 0.95),
         "p50_model_tokens": median(tokens) if tokens else None,
@@ -283,7 +285,14 @@ def _paired_statistics(case_comparisons: list[dict[str, Any]], *, resamples: int
     return result
 
 
-def compare_summaries(baseline: dict[str, Any], candidate: dict[str, Any], *, required_trials_per_case: int = 3) -> dict[str, Any]:
+def compare_summaries(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    required_trials_per_case: int = 3,
+    baseline_version: str | None = None,
+    candidate_version: str | None = None,
+) -> dict[str, Any]:
     if required_trials_per_case < 1:
         raise ValueError("required_trials_per_case must be positive")
     baseline_metrics = _metrics(baseline)
@@ -296,7 +305,9 @@ def compare_summaries(baseline: dict[str, Any], candidate: dict[str, Any], *, re
     }
     classifications: dict[str, list[str]] = {"improved": [], "regressed": [], "unchanged": []}
     for key in ("completion_rate", "evaluation_pass_rate", "test_pass_rate"):
-        delta = deltas[key]
+        delta = deltas.get(key)
+        if delta is None:
+            continue
         bucket = "improved" if delta > 0 else "regressed" if delta < 0 else "unchanged"
         classifications[bucket].append(key)
     for key in (
@@ -304,7 +315,9 @@ def compare_summaries(baseline: dict[str, Any], candidate: dict[str, Any], *, re
         "model_failed_rate", "trace_incomplete_rate", "infra_failed_rate",
         "path_policy_violation_rate", "diff_policy_violation_rate",
     ):
-        delta = deltas[key]
+        delta = deltas.get(key)
+        if delta is None:
+            continue
         bucket = "improved" if delta < 0 else "regressed" if delta > 0 else "unchanged"
         classifications[bucket].append(key)
     baseline_reliability = _case_reliability(list(baseline.get("jobs", [])), required_trials_per_case)
@@ -333,6 +346,12 @@ def compare_summaries(baseline: dict[str, Any], candidate: dict[str, Any], *, re
             "baseline": aggregate_behavior(list(baseline.get("jobs", []))),
             "candidate": aggregate_behavior(list(candidate.get("jobs", []))),
         },
+        "behavior_diff": behavior_deltas(
+            list(baseline.get("jobs", [])),
+            list(candidate.get("jobs", [])),
+            baseline_version=baseline_version,
+            candidate_version=candidate_version,
+        ),
         "failure_attribution": {
             "baseline": aggregate_attribution(list(baseline.get("jobs", []))),
             "candidate": aggregate_attribution(list(candidate.get("jobs", []))),

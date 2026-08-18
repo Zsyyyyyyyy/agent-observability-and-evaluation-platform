@@ -37,7 +37,7 @@
       <section class="panel comparison-panel" aria-labelledby="comparison-title">
         <div class="panel-head"><div><p class="eyebrow">DECISION MATRIX</p><h2 id="comparison-title">Case comparison</h2></div><button id="refresh" type="button">Refresh ↻</button></div>
         <p class="panel-note">Each row aligns the same Case across both versions. Select a row to compare all Trials side by side.</p>
-        <div class="matrix-head"><span>CASE</span><span class="baseline-label">BASELINE · v1</span><span>DELTA</span><span class="candidate-label">CANDIDATE · v2</span></div>
+        <div class="matrix-head"><span>CASE</span><span id="matrix-baseline-label" class="baseline-label">BASELINE</span><span>DELTA</span><span id="matrix-candidate-label" class="candidate-label">CANDIDATE</span></div>
         <div id="comparison-rows" class="comparison-rows"></div>
       </section>
       <aside class="panel reliability-panel" aria-labelledby="reliability-title">
@@ -69,6 +69,10 @@
         <div class="panel-head"><div><p class="eyebrow">TOOLING DISCIPLINE</p><h2 id="behavior-title">Behavior evidence</h2></div><span class="section-hint">trace semantics</span></div>
         <div id="behavior-content" class="evidence-content"></div>
       </section>
+      <section class="panel evidence-panel behavior-regression-panel" aria-labelledby="behavior-regression-title">
+        <div class="panel-head"><div><p class="eyebrow">VERSION REGRESSION</p><h2 id="behavior-regression-title">Behavior regression</h2></div><span class="section-hint">diagnostic only</span></div>
+        <div id="behavior-regression-content" class="evidence-content"></div>
+      </section>
       <section class="panel evidence-panel policy-stop-panel" aria-labelledby="policy-stop-title">
         <div class="panel-head"><div><p class="eyebrow">RUNTIME INVARIANT</p><h2 id="policy-stop-title">Success-stop evidence</h2></div><span class="section-hint">selected candidate traces</span></div>
         <div id="policy-stop-content" class="evidence-content"></div>
@@ -98,6 +102,11 @@
       <div id="case-diagnosis" class="case-diagnosis"></div>
       <div id="case-chart" class="case-chart"></div>
       <div id="case-summary" class="case-summary-grid"></div>
+      <section class="case-behavior-regression" aria-labelledby="case-behavior-title">
+        <div class="case-behavior-head"><div><p class="eyebrow">BEHAVIOR REGRESSION</p><h3 id="case-behavior-title">What changed in this Case?</h3></div><span class="section-hint">paired Trial evidence</span></div>
+        <div id="case-behavior-metrics" class="case-behavior-metrics"></div>
+        <div class="case-behavior-lower"><section><p class="eyebrow">BEHAVIOR CHANGES</p><div id="case-behavior-changes"></div></section><section><p class="eyebrow">FAILURE EVIDENCE</p><div id="case-failure-evidence"></div></section></div>
+      </section>
       <div class="paired-heading"><p class="eyebrow">PAIRED TRIAL EVIDENCE</p><span>Each row is the same Case and repeat index. Open either side to inspect its trace and diff.</span></div>
       <div id="case-detail-content" class="paired-runs"></div>
     </section>
@@ -114,6 +123,6 @@
     </section>
   </main>
   <footer>READ-ONLY LOCAL CONSOLE · DECISION / CASE / TRACE / DIFF / POLICY</footer>
-  <script src="./app.js"></script>
+  <script src="./app.js?v=1.0.2"></script>
 </body>
 </html>

@@ -45,6 +45,21 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(comparison["delta"]["avg_tool_calls"], -1)
         self.assertIn("avg_tool_calls", comparison["classification"]["improved"])
 
+    def test_comparison_includes_paired_behavior_deltas(self):
+        snapshot = {"schema_version": 1, "model_calls": 2, "tool_calls": 3, "tool_success_rate": 1.0, "duplicate_reads": 1, "repeated_tool_calls": 0, "input_tokens": 200, "output_tokens": 40, "total_tokens": 240, "duration_ms": 100}
+        comparison = compare_summaries(
+            {"jobs": [{"case_id": "case", "trial_index": 1, "behavior_snapshot": snapshot}]},
+            {"jobs": [{"case_id": "case", "trial_index": 1, "behavior_snapshot": {**snapshot, "model_calls": 1, "tool_calls": 2}}]},
+            baseline_version="v3",
+            candidate_version="v4.1",
+        )
+
+        delta = comparison["behavior_diff"]["deltas"][0]
+        self.assertEqual(delta["baseline_version"], "v3")
+        self.assertEqual(delta["candidate_version"], "v4.1")
+        self.assertEqual(delta["delta"]["model_calls"], -1)
+        self.assertEqual(delta["delta"]["tool_calls"], -1)
+
     def test_comparison_treats_model_failures_as_reliability_regression(self):
         baseline = {"jobs": [{"status": "completed", "evaluation_passed": True, "test_passed": True}]}
         candidate = {"jobs": [{"status": "model_failed", "evaluation_passed": False, "test_passed": False}]}
@@ -137,7 +152,9 @@ class ExperimentTests(unittest.TestCase):
             )
             (trial_dir / "result.json").write_text(json.dumps({"trace_path": str(trace)}), encoding="utf-8")
             hydrated = _hydrate_trial_diagnostics({"jobs": [{"job_id": "case_trial_001"}]}, case_dir)
-        self.assertEqual(hydrated["jobs"][0]["behavior"]["tool_success_rate"], 1.0)
+        self.assertIsNone(hydrated["jobs"][0]["behavior"]["tool_success_rate"])
+        self.assertEqual(hydrated["jobs"][0]["behavior"]["capability_source"], "historical_unknown")
+        self.assertIsNone(hydrated["jobs"][0]["behavior_snapshot"]["tool_calls"])
 
     def test_report_only_hydrates_selected_attempt_source_identity(self):
         with TemporaryDirectory() as directory:

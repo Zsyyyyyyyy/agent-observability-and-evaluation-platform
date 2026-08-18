@@ -14,6 +14,19 @@ from threading import Lock
 from typing import Any
 
 
+SPAN_TYPES = {
+    "agent",
+    "llm",
+    "tool",
+    "test",
+    "retrieval",
+    "context",
+    "workflow",
+    "mcp",
+    "other",
+}
+
+
 class TraceCollector:
     """Write ordered, append-only trace events to a JSONL file."""
 
@@ -41,7 +54,16 @@ class TraceCollector:
                 handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
             return payload
 
-    def start_span(self, name: str, parent_id: str | None = None, **attrs: Any) -> str:
+    def start_span(
+        self,
+        name: str,
+        parent_id: str | None = None,
+        *,
+        span_type: str = "other",
+        **attrs: Any,
+    ) -> str:
+        if span_type not in SPAN_TYPES:
+            raise ValueError(f"unsupported span_type: {span_type!r}")
         with self._lock:
             self._span_seq += 1
             span_id = f"span_{self._span_seq:04d}"
@@ -50,6 +72,7 @@ class TraceCollector:
             "span_id": span_id,
             "parent_span_id": parent_id,
             "name": name,
+            "span_type": span_type,
             "attributes": attrs,
         })
         return span_id

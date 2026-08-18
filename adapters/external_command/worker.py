@@ -26,6 +26,7 @@ from regression_lab.sandbox import DockerSandbox, SandboxConfig, SandboxUnavaila
 from regression_lab.schema import validate_trace
 from regression_lab.store import RunStore
 from regression_lab.artifacts import write_json_atomically
+from regression_lab.trace import TraceCollector
 
 
 def _git(worktree: Path, *args: str) -> str:
@@ -89,10 +90,8 @@ MODEL_FAILURE_KINDS = frozenset({
 def _command_source_hash(command: list[str]) -> str | None:
     """Measure the trusted local entry point before it is executed."""
 
-    candidate = Path(command[-1])
-    if not candidate.is_file():
-        return None
-    return "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+    candidate = next((Path(argument) for argument in reversed(command) if Path(argument).is_file()), None)
+    return "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate else None
 
 
 def _read_output(path: Path) -> tuple[str, str, str | None]:
@@ -111,6 +110,12 @@ def _read_output(path: Path) -> tuple[str, str, str | None]:
     if failure_kind is not None and (reason != "model_error" or failure_kind not in MODEL_FAILURE_KINDS):
         raise ValueError("invalid agent output: unsupported model_failure_kind")
     return response, reason, failure_kind
+
+
+def _resolve_command(command: list[str], *, worktree: Path, task: str) -> list[str]:
+    """Resolve only the two AgentSpec v1 placeholders without involving a shell."""
+
+    return [item.replace("{workspace}", str(worktree)).replace("{task}", task) for item in command]
 
 
 def _model_usage(trace_path: Path) -> dict[str, int]:
@@ -178,18 +183,39 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
     trace_path, result_path = Path(spec["trace_output"]), Path(spec["result_output"])
     agent_output = result_path.with_name("agent-output.json")
+    observation_mode = spec.get("observation_mode", "sdk")
     result: dict[str, Any] = {
         "trial_id": trial_id, "adapter_id": "external-command", "adapter_version": (spec.get("adapter") or {}).get("default_version", "external-agent-v1"),
         "agent_version": spec.get("agent_version"), "agent_profile": spec.get("agent_profile"), "attempt_id": spec.get("attempt_id"), "status": "infra_failed", "trace_id": trace_id,
-        "agent_exit_reason": None, "agent_response": "", "model_failure": None, "changed_files": [], "test_exit_code": None, "error": None,
+        "agent_exit_reason": None, "agent_response": "", "agent_output": {
+            "availability": "unavailable", "source": "not_provided", "reason": "Agent output has not been observed",
+        }, "process_lifecycle": {"started": False, "status": "not_started"},
+        "model_failure": None, "changed_files": [], "test_exit_code": None, "error": None,
         "allowed_paths": spec.get("allowed_paths", ["**"]), "forbidden_paths": spec.get("forbidden_paths", []),
         "allowed_tools": spec.get("allowed_tools", []), "denied_tools": spec.get("denied_tools", []), "budget": spec.get("budget", {}),
         "trace_path": str(trace_path), "run_store": spec.get("run_store"), "model_usage": {},
         "agent_source_hash": None,
         "expected_agent_source_hash": spec.get("expected_agent_source_hash"),
         "agent_source_hash_matches_protocol": None,
+        # Capability comes from the platform-owned Trial Spec, never from the
+        # external Agent process. It may differ from the generic Adapter default.
+        "adapter_capabilities": spec.get("adapter_capabilities"),
+        "observation_mode": observation_mode,
     }
+    lifecycle_trace: TraceCollector | None = None
+    lifecycle_span_id: str | None = None
+    lifecycle_started = time.monotonic()
     try:
+        if observation_mode not in {"sdk", "blackbox"}:
+            raise ValueError("observation_mode must be sdk or blackbox")
+        if observation_mode == "blackbox":
+            lifecycle_trace = TraceCollector(trace_path, trace_id)
+            lifecycle_span_id = lifecycle_trace.start_span(
+                "agent.run", span_type="agent",
+                trial_id=trial_id, case_id=str(spec.get("case_id", "")),
+                agent_version=str(spec.get("agent_version", "")), adapter_id="external-command",
+                observation_mode="blackbox", trace_origin="platform", trace_scope="process_lifecycle",
+            )
         if not worktree.is_dir():
             raise ValueError(f"worktree does not exist: {worktree}")
         if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
@@ -214,7 +240,8 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         environment["REGRESSION_MAX_TOKENS"] = str(spec.get("max_tokens", 1000))
         if spec.get("agent_profile"):
             environment["REGRESSION_AGENT_PROFILE"] = str(spec["agent_profile"])
-        timeout = int((spec.get("sandbox") or {}).get("timeout_seconds", 30))
+        timeout = int(spec.get("trial_timeout_seconds", (spec.get("sandbox") or {}).get("timeout_seconds", 30)))
+        command = _resolve_command(command, worktree=worktree, task=str(spec.get("prompt", "")))
         try:
             returncode, stdout, stderr, timed_out = _run_external_command(
                 command, worktree=worktree, environment=environment, timeout=timeout
@@ -223,17 +250,32 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
             raise RuntimeError(f"external command unavailable: {exc.filename}") from exc
         if timed_out:
             result.update({"status": "timed_out", "error": "external command exceeded trial deadline", "agent_exit_reason": "deadline_exceeded"})
+            result["process_lifecycle"] = {"started": True, "status": "deadline_exceeded", "return_code": returncode}
         else:
             result["agent_stdout"] = stdout[-2000:]
             result["agent_stderr"] = stderr[-2000:]
             if returncode != 0:
                 result.update({"status": "agent_failed", "error": f"external command exited {returncode}", "agent_exit_reason": "process_error"})
+                result["process_lifecycle"] = {"started": True, "status": "process_error", "return_code": returncode}
+            elif observation_mode == "blackbox":
+                # Process completion is platform evidence, never an Agent response.
+                result.update({"agent_exit_reason": "process_completed"})
+                result["process_lifecycle"] = {"started": True, "status": "process_completed", "return_code": returncode}
+                result["agent_output"] = {
+                    "availability": "unavailable", "source": "not_provided",
+                    "reason": "blackbox mode does not require an Agent output file",
+                }
+                test = _run_test(worktree, str(spec["test_command"]), sandbox, timeout, environment)
+                result.update({"test_exit_code": test["exit_code"], "test_duration_ms": test["duration_ms"], "test_stdout": test["stdout"], "test_stderr": test["stderr"]})
+                result["status"] = "infra_failed" if test.get("sandbox_status") == "unavailable" else "timed_out" if test.get("sandbox_status") == "timed_out" else "completed" if test["exit_code"] == 0 else "agent_failed"
             else:
                 try:
                     result["agent_response"], result["agent_exit_reason"], failure_kind = _read_output(agent_output)
                 except ValueError as exc:
                     result.update({"status": "agent_failed", "error": str(exc), "agent_exit_reason": "contract_error"})
                 else:
+                    result["agent_output"] = {"availability": "available", "source": "agent"}
+                    result["process_lifecycle"] = {"started": True, "status": "process_completed", "return_code": returncode}
                     if result["agent_exit_reason"] == "model_error":
                         result.update({
                             "status": "model_failed", "error": "external Agent reported a model error",
@@ -248,6 +290,15 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         result.update({"status": "infra_failed", "error": f"{type(exc).__name__}: {exc}", "agent_exit_reason": "adapter_error"})
     finally:
+        if lifecycle_trace is not None and lifecycle_span_id is not None:
+            process = result.get("process_lifecycle") if isinstance(result.get("process_lifecycle"), dict) else {}
+            process_status = process.get("status") if isinstance(process.get("status"), str) else "adapter_error"
+            span_status = "ok" if process_status == "process_completed" else "timed_out" if process_status == "deadline_exceeded" else "agent_failed" if process_status == "process_error" else "infra_failed"
+            lifecycle_trace.end_span(
+                lifecycle_span_id, span_status,
+                duration_ms=round((time.monotonic() - lifecycle_started) * 1000, 3),
+                process_status=process_status,
+            )
         try:
             _record_git_evidence(result, worktree)
         except Exception as exc:

@@ -6,8 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from regression_lab.behavior import aggregate_behavior
+from regression_lab.behavior import aggregate_behavior, summarize_trial_behavior
+from regression_lab.behavior_diff import snapshot_trial_behavior
 from regression_lab.evolution_catalog import EvolutionCatalog
+
+
+def _observed_number(value: object) -> int | float | None:
+    """Keep absent evidence distinct from an observed numeric zero."""
+
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 class DashboardRepository:
@@ -43,6 +50,16 @@ class DashboardRepository:
             if not result:
                 continue
             scores = {item.get("evaluator"): item for item in result.get("scores", []) if isinstance(item, dict)}
+            behavior = summarize_trial_behavior(result)
+            capabilities = behavior.get("adapter_capabilities") or {}
+            tool_calls = _observed_number((scores.get("tool_integrity") or {}).get("actual", {}).get("tool_calls"))
+            model_tokens = _observed_number((result.get("model_usage") or {}).get("total_tokens"))
+            # Capability is the source of truth for whether a zero is observable.
+            # A Black-box lifecycle Trace must be shown as N/A, never as zero usage.
+            if capabilities.get("tool_trace") is not True:
+                tool_calls = None
+            if capabilities.get("model_usage") is not True:
+                model_tokens = None
             rows.append({
                 "id": result["console_id"], "trial_id": result.get("trial_id"), "agent_version": result.get("agent_version"),
                 "case_id": result.get("case_id") or str(result.get("trial_id", "")).rsplit("_trial_", 1)[0],
@@ -52,11 +69,17 @@ class DashboardRepository:
                 "error": result.get("error"),
                 "failure_kind": (result.get("failure_attribution") or {}).get("kind"),
                 "failure_reason": (result.get("failure_attribution") or {}).get("reason"),
+                "failure_span": (result.get("failure_attribution") or {}).get("failure_span"),
+                "failure_evidence": (result.get("failure_attribution") or {}).get("evidence"),
                 "duration_ms": (scores.get("budget") or {}).get("actual", {}).get("duration_ms", 0),
-                "tool_calls": (scores.get("tool_integrity") or {}).get("actual", {}).get("tool_calls", 0),
-                "model_tokens": (result.get("model_usage") or {}).get("total_tokens", 0),
+                "tool_calls": tool_calls,
+                "model_tokens": model_tokens,
                 "changed_files": result.get("changed_files", []),
-                "behavior": result.get("behavior"),
+                "behavior": behavior,
+                "adapter_capabilities": behavior.get("adapter_capabilities"),
+                "capability_source": behavior.get("capability_source"),
+                "evidence_availability": behavior.get("evidence_availability"),
+                "behavior_snapshot": snapshot_trial_behavior(result),
             })
         return sorted(rows, key=lambda row: str(row["id"]))
 
@@ -67,6 +90,7 @@ class DashboardRepository:
         result = self._read_result(candidate)
         if not result:
             return None
+        result["behavior"] = summarize_trial_behavior(result)
         trace_path = Path(str(result.get("trace_path", "")))
         events = []
         if trace_path.is_file():
@@ -144,6 +168,11 @@ class DashboardRepository:
     def dashboard(self) -> dict[str, Any]:
         rows = self.trials()
         count = len(rows) or 1
+        def observed_average(metric: str) -> float | None:
+            values = [_observed_number(row.get(metric)) for row in rows]
+            observed = [float(value) for value in values if value is not None]
+            return sum(observed) / len(observed) if observed else None
+
         return {
             "runtime_label": f"Local experiment artifacts · {self.runtime_root.name}",
             "trial_count": len(rows),
@@ -154,8 +183,8 @@ class DashboardRepository:
             "trace_incomplete_count": sum(row["status"] == "trace_incomplete" for row in rows),
             "trace_incomplete_rate": sum(row["status"] == "trace_incomplete" for row in rows) / count if rows else 0.0,
             "avg_duration_ms": sum(float(row["duration_ms"] or 0) for row in rows) / count if rows else 0.0,
-            "avg_tool_calls": sum(float(row["tool_calls"] or 0) for row in rows) / count if rows else 0.0,
-            "avg_model_tokens": sum(float(row["model_tokens"] or 0) for row in rows) / count if rows else 0.0,
+            "avg_tool_calls": observed_average("tool_calls"),
+            "avg_model_tokens": observed_average("model_tokens"),
             "behavior": aggregate_behavior([
                 {
                     "status": row["status"], "evaluation_passed": row["passed"],

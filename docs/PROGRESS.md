@@ -626,3 +626,24 @@ conclusion: latency/tool-cost trade-off; one trial per Case is not enough to cla
 ### 下一步
 
 产品化阶段 6：补齐一键启动、Docker 集成 CI、演示材料与简历项目描述；并将多 Trial 实验作为下一轮数据质量增强。
+
+## 2026-08-12：阶段 7 / 外接 Agent 统计可信度增强
+
+### 已完成
+
+- [x] 将外接 Agent `external-openai-v2/v3` 扩展到完整 8 Case × 3 Trial × 2 Version，共 48 条真实 Trial；两版均为 24/24 平台有效通过。
+- [x] 在 Experiment Report 中新增固定种子的按 Case 聚类 Bootstrap 95% 区间、有效配对数和 Case 胜负分布；不使用 p-value，不将统计诊断直接写入 Gate。
+- [x] Console 新增 Statistical Evidence 面板：展示区间、样本量、Case 胜负和 `observed / inconclusive / limited coverage` 结论等级。
+- [x] 得到克制结论：v3 latency 平均 delta -91 ms，但 95% 区间为 -393 ms 到 +193 ms，不能称整体更快；Token +212（区间 +73 到 +433）、工具调用 +0.42（区间 +0.29 到 +0.58）。
+- [x] 复用既有 Gate：11/11 规则通过、`promote`，但 P95 latency +1,682 ms 作为人工复核诊断保留。
+
+### 验证结果
+
+```text
+unit suite: 93 passed (3 Docker integration tests skipped by default)
+real statistical experiment: 48/48 completed, evaluated, trace-valid Trials
+```
+
+### 下一步
+
+不进入发布审计。若继续产品迭代，应先基于阶段 7 的慢 Trial Trace 提出可验证的 v4 单变量假设，而不是直接宣称 v3 性能优化。

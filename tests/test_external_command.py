@@ -5,11 +5,20 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
+from adapters.external_command import worker
 from adapters.external_command.worker import run_trial
+from regression_lab.behavior_diff import snapshot_trial_behavior
 
 
 class ExternalCommandAdapterTests(unittest.TestCase):
+    BLACKBOX_CAPABILITIES = {
+        "schema_version": 2, "trace": True, "hierarchical_trace": False,
+        "model_usage": False, "tool_trace": False, "tool_semantics": False,
+        "test_trace": False, "context_trace": False, "workflow_trace": False, "mcp_trace": False,
+    }
+
     def _worktree(self, root: Path) -> Path:
         worktree = root / "worktree"
         worktree.mkdir()
@@ -80,6 +89,17 @@ class ExternalCommandAdapterTests(unittest.TestCase):
         self.assertFalse(result["agent_source_hash_matches_protocol"])
         self.assertNotEqual(result["agent_source_hash"], result["expected_agent_source_hash"])
 
+    def test_source_hash_finds_entrypoint_before_agent_templates(self):
+        with TemporaryDirectory() as directory:
+            agent = Path(directory) / "agent.py"
+            agent.write_text("print('agent')\n", encoding="utf-8")
+            expected_hash = "sha256:" + hashlib.sha256(agent.read_bytes()).hexdigest()
+            source_hash = worker._command_source_hash([
+                sys.executable, str(agent), "--workspace", "{workspace}", "--task", "{task}",
+            ])
+
+        self.assertEqual(source_hash, expected_hash)
+
     def test_agent_output_cannot_override_platform_identity_or_scores(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -138,7 +158,137 @@ class ExternalCommandAdapterTests(unittest.TestCase):
                 "allowed_paths": ["calculator.py"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
             })
         self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(result["agent_exit_reason"], "deadline_exceeded")
+
+    def test_blackbox_success_uses_platform_lifecycle_trace_without_agent_output(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "blackbox_agent.py"
+            agent.write_text(
+                "import os\nfrom pathlib import Path\n"
+                "Path(os.environ['REGRESSION_WORKTREE'], 'calculator.py').write_text(\"def calculate(value):\\n    return 0 if value == '' else int(value) + 1\\n\", encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            trace_path = root / "trace.jsonl"
+            result = run_trial({
+                "trial_id": "blackbox_trial_001", "case_id": "calculator_empty", "agent_version": "blackbox-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                "trace_output": str(trace_path), "result_output": str(root / "result.json"),
+                "test_command": f"{sys.executable} -m unittest test_calculator.py", "sandbox": None,
+                "allowed_paths": ["calculator.py", "__pycache__/**"], "forbidden_paths": [], "allowed_tools": ["edit_file"], "denied_tools": [],
+                "budget": {"max_tool_calls": 2, "max_duration_ms": 10_000},
+                "observation_mode": "blackbox", "adapter_capabilities": self.BLACKBOX_CAPABILITIES,
+            })
+            events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["evaluation"]["passed"])
+        self.assertEqual(result["agent_response"], "")
+        self.assertEqual(result["agent_output"], {
+            "availability": "unavailable", "source": "not_provided",
+            "reason": "blackbox mode does not require an Agent output file",
+        })
+        self.assertEqual(result["process_lifecycle"]["status"], "process_completed")
+        self.assertTrue(result["trace_validation"]["valid"])
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["name"], "agent.run")
+        self.assertEqual(events[0]["span_type"], "agent")
+        self.assertEqual(events[0]["attributes"].get("observation_mode"), "blackbox")
+        self.assertEqual(events[0]["attributes"].get("trace_origin"), "platform")
+        self.assertEqual(events[0]["attributes"].get("trace_scope"), "process_lifecycle")
+        self.assertEqual(events[1]["status"], "ok")
+        self.assertEqual(result["behavior"]["capability_source"], "artifact_snapshot")
+        self.assertEqual(result["behavior"]["evidence_availability"]["tool_trace"], "unsupported")
+        self.assertIsNone(result["behavior"]["tool_calls"])
+        snapshot = snapshot_trial_behavior(result)
+        self.assertEqual(snapshot["evidence_availability"]["model_calls"], "unsupported")
+        self.assertIsNone(snapshot["model_calls"])
+
+    def test_blackbox_nonzero_exit_closes_platform_trace(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "fail.py"
+            agent.write_text("raise SystemExit(7)\n", encoding="utf-8")
+            result = run_trial({
+                "trial_id": "blackbox_trial_002", "case_id": "calculator_empty", "agent_version": "blackbox-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"), "test_command": "true", "sandbox": None,
+                "allowed_paths": ["calculator.py"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
+                "observation_mode": "blackbox", "adapter_capabilities": self.BLACKBOX_CAPABILITIES,
+            })
+
+        self.assertEqual(result["status"], "agent_failed")
+        self.assertEqual(result["agent_exit_reason"], "process_error")
+        self.assertEqual(result["process_lifecycle"]["return_code"], 7)
+        self.assertTrue(result["trace_validation"]["valid"])
+
+    def test_blackbox_timeout_uses_existing_process_group_cleanup_and_closes_trace(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "slow.py"
+            agent.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
+            with mock.patch("adapters.external_command.worker.terminate_process_group", wraps=worker.terminate_process_group) as cleanup:
+                result = run_trial({
+                    "trial_id": "blackbox_trial_003", "case_id": "calculator_empty", "agent_version": "blackbox-v1",
+                    "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                    "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"), "test_command": "true", "sandbox": None,
+                    "trial_timeout_seconds": 1,
+                    "allowed_paths": ["calculator.py"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
+                    "observation_mode": "blackbox", "adapter_capabilities": self.BLACKBOX_CAPABILITIES,
+                })
+
+        self.assertEqual(result["status"], "timed_out")
+        self.assertEqual(result["process_lifecycle"]["status"], "deadline_exceeded")
+        self.assertTrue(result["trace_validation"]["valid"])
+        self.assertTrue(cleanup.called)
+
+    def test_blackbox_resolves_workspace_and_task_in_argv_without_shell(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "arguments.py"
+            agent.write_text(
+                "import sys\nfrom pathlib import Path\n"
+                "workspace, task = sys.argv[1:]\n"
+                "assert workspace == str(Path.cwd())\nassert task == 'repair calculator; do not shell expand'\n"
+                "Path('calculator.py').write_text(\"def calculate(value):\\n    return 0 if value == '' else int(value) + 1\\n\", encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            result = run_trial({
+                "trial_id": "blackbox_trial_004", "case_id": "calculator_empty", "agent_version": "blackbox-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent), "{workspace}", "{task}"], "worktree": str(worktree),
+                "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"),
+                "prompt": "repair calculator; do not shell expand", "test_command": f"{sys.executable} -m unittest test_calculator.py", "sandbox": None,
+                "allowed_paths": ["calculator.py", "__pycache__/**"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
+                "observation_mode": "blackbox", "adapter_capabilities": self.BLACKBOX_CAPABILITIES,
+            })
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["evaluation"]["passed"])
+
+    def test_sdk_mode_still_requires_agent_output_contract(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "sdk_missing_output.py"
+            agent.write_text(
+                "from regression_lab.sdk import AgentObserver\n"
+                "with AgentObserver.from_environment().run(): pass\n",
+                encoding="utf-8",
+            )
+            result = run_trial({
+                "trial_id": "sdk_trial_missing_output", "case_id": "calculator_empty", "agent_version": "sdk-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"), "test_command": "true", "sandbox": None,
+                "allowed_paths": ["calculator.py"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
+                "adapter_capabilities": {"schema_version": 2, "trace": True, "hierarchical_trace": True, "model_usage": False, "tool_trace": False, "tool_semantics": False, "test_trace": False, "context_trace": False, "workflow_trace": False, "mcp_trace": False},
+            })
+
+        self.assertEqual(result["status"], "agent_failed")
+        self.assertEqual(result["agent_exit_reason"], "contract_error")
+        self.assertTrue(result["trace_validation"]["valid"])
 
 
 if __name__ == "__main__":

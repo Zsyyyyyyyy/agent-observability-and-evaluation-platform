@@ -11,26 +11,34 @@ import json
 import os
 import time
 from contextlib import AbstractContextManager
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any
 
-from regression_lab.trace import TraceCollector
+from regression_lab.trace import SPAN_TYPES, TraceCollector
+
+
+_current_span: ContextVar[tuple["AgentObserver", str] | None] = ContextVar("regression_lab_current_span", default=None)
 
 
 class _Span(AbstractContextManager["_Span"]):
-    def __init__(self, observer: "AgentObserver", name: str, parent_id: str | None, attrs: dict[str, Any], *, on_enter: Any = None):
-        self.observer, self.name, self.parent_id, self.attrs = observer, name, parent_id, attrs
-        self.on_enter = on_enter
+    def __init__(self, observer: "AgentObserver", name: str, span_type: str, attrs: dict[str, Any], *, root: bool = False):
+        self.observer, self.name, self.span_type, self.attrs = observer, name, span_type, attrs
+        self.root = root
         self.span_id: str | None = None
+        self._context_token: Token[tuple["AgentObserver", str] | None] | None = None
         self.started = 0.0
         self.status = "ok"
         self.end_attrs: dict[str, Any] = {}
 
     def __enter__(self) -> "_Span":
         self.started = time.monotonic()
-        self.span_id = self.observer._start(self.name, self.parent_id, **self.attrs)
-        if self.on_enter is not None:
-            self.on_enter(self.span_id)
+        parent_id = None if self.root else self.observer._current_parent_id()
+        self.span_id = self.observer._start(self.name, parent_id, self.span_type, **self.attrs)
+        if self.root:
+            self.observer._root_id = self.span_id
+        if self.span_id is not None:
+            self._context_token = _current_span.set((self.observer, self.span_id))
         return self
 
     def end(self, status: str = "ok", **attrs: Any) -> None:
@@ -54,6 +62,8 @@ class _Span(AbstractContextManager["_Span"]):
         if exc is not None:
             attrs["error_type"] = type(exc).__name__
         self.observer._end(self.span_id, status, **attrs)
+        if self._context_token is not None:
+            _current_span.reset(self._context_token)
         return False
 
 
@@ -86,11 +96,11 @@ class AgentObserver:
             agent_profile=os.environ.get("REGRESSION_AGENT_PROFILE") or None,
         )
 
-    def _start(self, name: str, parent_id: str | None, **attrs: Any) -> str | None:
+    def _start(self, name: str, parent_id: str | None, span_type: str, **attrs: Any) -> str | None:
         if self.trace is None:
             return None
         try:
-            return self.trace.start_span(name, parent_id=parent_id, **attrs)
+            return self.trace.start_span(name, parent_id=parent_id, span_type=span_type, **attrs)
         except OSError:
             return None
 
@@ -102,22 +112,33 @@ class AgentObserver:
         except OSError:
             pass
 
+    def _current_parent_id(self) -> str | None:
+        current = _current_span.get()
+        if current is not None and current[0] is self:
+            return current[1]
+        return self._root_id
+
+    def span(self, name: str, span_type: str = "other", **attrs: Any) -> _Span:
+        if span_type not in SPAN_TYPES:
+            raise ValueError(f"unsupported span_type: {span_type!r}")
+        return _Span(self, name, span_type, attrs)
+
     def run(self, **attrs: Any) -> _Span:
         values = {"trial_id": self.trial_id, "case_id": self.case_id, "agent_version": self.agent_version,
                   "adapter_id": self.adapter_id, **({"agent_profile": self.agent_profile} if self.agent_profile else {}), **attrs}
-        return _Span(self, "agent.run", None, values, on_enter=lambda span_id: setattr(self, "_root_id", span_id))
+        return _Span(self, "agent.run", "agent", values, root=True)
 
     def model_call(self, *, model: str, **attrs: Any) -> _Span:
-        return _Span(self, "model.call", self._root_id, {"model": model, **attrs})
+        return self.span("model.call", "llm", model=model, **attrs)
 
     def tool_call(self, tool_name: str, **attrs: Any) -> _Span:
-        return _Span(self, "tool.call", self._root_id, {"tool_name": tool_name, **attrs})
+        return self.span("tool.call", "tool", tool_name=tool_name, **attrs)
 
     def event(self, name: str, **attrs: Any) -> None:
         if self.trace is None:
             return
         try:
-            self.trace.event(name, parent_id=self._root_id, **attrs)
+            self.trace.event(name, parent_id=self._current_parent_id(), **attrs)
         except OSError:
             pass
 
