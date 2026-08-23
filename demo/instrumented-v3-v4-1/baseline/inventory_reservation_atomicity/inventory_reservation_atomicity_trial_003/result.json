@@ -1,0 +1,392 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "The fix is complete and tests are passing (the displayed output is truncated by the harness, but the shown tests report `ok` and the run completes without failures).\n\n## Summary\n\nI fixed `reserve_all` in `src/service.py`:\n\n**Before:** Each line was validated and applied immediately, so a later failure left earlier decrements visible in the caller's `stock`. Repeated SKUs were also checked line-by-line rather than as an atomic batch.\n\n**After:** The function now works in two distinct phases, respecting the division of labor with `src/inventory.py` (low-level validation helpers) vs. `src/service.py` (batch policy):\n\n1. **Validate & aggregate:** Walk every line once, validating SKU and quantity via the `src.inventory.py` helpers. Simultaneously build the ordered request list and aggregate the total demand per SKU (`needed`). No mutation happens here.\n2. **Check sufficiency:** Raise `insufficient stock for {sku}` if any SKU's aggregated batch total exceeds available stock — repeated SKUs are judged as one atomic batch.\n3. **Commit:** Only after every line is valid and all stock is sufficient, decrement `stock` for each request and build the return value, preserving the original request order.\n\nAny validation error, insufficient-stock error, or later-line failure leaves the caller's `stock` completely unchanged.",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 9,
+    "denied_tool_attempts": 1,
+    "duplicate_read_rate": 0.0,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.3333333333333333,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 3,
+        "denied": 1,
+        "error": 0,
+        "ok": 2
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 3,
+        "denied": 0,
+        "error": 0,
+        "ok": 3
+      }
+    },
+    "tool_calls": 9,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 0.8888888888888888,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 20
+  },
+  "changed_files": [
+    "src/service.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 4,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_invalid_line_leaves_stock_unchanged (test_service.InventoryReservationTests.test_invalid_line_leaves_stock_unchanged) ... ok\ntest_late_insufficient_line_leaves_stock_unchanged (test_service.InventoryReservationTests.test_late_insufficient_line_leaves_stock_unchanged) ... ok\ntest_repeated_sku_is_checked_as_one_atomic_batch (test_service.InventoryReservationTests.test_repeated_sku_is_checked_as_one_atomic_batch) ... ok\ntest_reserves_every_valid_line_in_request_order (test_service.InventoryReservationTests.test_reserves_every_valid_line_in_request_order) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/service.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 35,
+          "span_count": 17,
+          "trace_id": "trace_bf4d208f1ae4",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_bf4d208f1ae4"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 13,
+          "binary": false,
+          "deleted_lines": 5,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/service.py"
+          ],
+          "patch": "diff --git a/src/service.py b/src/service.py\nindex 91c5d61..12e652e 100644\n--- a/src/service.py\n+++ b/src/service.py\n@@ -6,13 +6,21 @@ from src.inventory import validated_quantity, validated_sku\n def reserve_all(stock, lines):\n     \"\"\"Reserve every requested line and mutate ``stock`` only on success.\"\"\"\n \n-    reserved = []\n+    # Validate the whole batch and aggregate per-SKU demand before touching\n+    # the caller's stock so any failure leaves it completely unchanged.\n+    requests = []\n+    needed = {}\n     for line in lines:\n         sku = validated_sku(line)\n         quantity = validated_quantity(line)\n-        if stock.get(sku, 0) < quantity:\n+        requests.append((sku, quantity))\n+        needed[sku] = needed.get(sku, 0) + quantity\n+\n+    for sku, total in needed.items():\n+        if stock.get(sku, 0) < total:\n             raise ValueError(f\"insufficient stock for {sku}\")\n-        # BUG: an error in a later line leaves prior decrements visible.\n+\n+    for sku, quantity in requests:\n         stock[sku] -= quantity\n-        reserved.append({\"sku\": sku, \"quantity\": quantity})\n-    return reserved\n+\n+    return [{\"sku\": sku, \"quantity\": quantity} for sku, quantity in requests]\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [
+            "bash"
+          ],
+          "missing_end": [],
+          "tool_calls": 9,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 17229.133,
+          "tool_calls": 9,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 20
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/service.py b/src/service.py\nindex 91c5d61..12e652e 100644\n--- a/src/service.py\n+++ b/src/service.py\n@@ -6,13 +6,21 @@ from src.inventory import validated_quantity, validated_sku\n def reserve_all(stock, lines):\n     \"\"\"Reserve every requested line and mutate ``stock`` only on success.\"\"\"\n \n-    reserved = []\n+    # Validate the whole batch and aggregate per-SKU demand before touching\n+    # the caller's stock so any failure leaves it completely unchanged.\n+    requests = []\n+    needed = {}\n     for line in lines:\n         sku = validated_sku(line)\n         quantity = validated_quantity(line)\n-        if stock.get(sku, 0) < quantity:\n+        requests.append((sku, quantity))\n+        needed[sku] = needed.get(sku, 0) + quantity\n+\n+    for sku, total in needed.items():\n+        if stock.get(sku, 0) < total:\n             raise ValueError(f\"insufficient stock for {sku}\")\n-        # BUG: an error in a later line leaves prior decrements visible.\n+\n+    for sku, quantity in requests:\n         stock[sku] -= quantity\n-        reserved.append({\"sku\": sku, \"quantity\": quantity})\n-    return reserved\n+\n+    return [{\"sku\": sku, \"quantity\": quantity} for sku, quantity in requests]\n",
+  "git_evidence": {
+    "base_revision": "e157968416e9fa4fc8e50760ef428e8dac207974",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/service.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 1873,
+    "prompt_tokens": 14157,
+    "total_tokens": 16030
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 3,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 4,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_invalid_line_leaves_stock_unchanged (test_service.InventoryReservationTests.test_invalid_line_leaves_stock_unchanged) ... ok\ntest_late_insufficient_line_leaves_stock_unchanged (test_service.InventoryReservationTests.test_late_insufficient_line_leaves_stock_unchanged) ... ok\ntest_repeated_sku_is_checked_as_one_atomic_batch (test_service.InventoryReservationTests.test_repeated_sku_is_checked_as_one_atomic_batch) ... ok\ntest_reserves_every_valid_line_in_request_order (test_service.InventoryReservationTests.test_reserves_every_valid_line_in_request_order) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/service.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 35,
+        "span_count": 17,
+        "trace_id": "trace_bf4d208f1ae4",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_bf4d208f1ae4"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 13,
+        "binary": false,
+        "deleted_lines": 5,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/service.py"
+        ],
+        "patch": "diff --git a/src/service.py b/src/service.py\nindex 91c5d61..12e652e 100644\n--- a/src/service.py\n+++ b/src/service.py\n@@ -6,13 +6,21 @@ from src.inventory import validated_quantity, validated_sku\n def reserve_all(stock, lines):\n     \"\"\"Reserve every requested line and mutate ``stock`` only on success.\"\"\"\n \n-    reserved = []\n+    # Validate the whole batch and aggregate per-SKU demand before touching\n+    # the caller's stock so any failure leaves it completely unchanged.\n+    requests = []\n+    needed = {}\n     for line in lines:\n         sku = validated_sku(line)\n         quantity = validated_quantity(line)\n-        if stock.get(sku, 0) < quantity:\n+        requests.append((sku, quantity))\n+        needed[sku] = needed.get(sku, 0) + quantity\n+\n+    for sku, total in needed.items():\n+        if stock.get(sku, 0) < total:\n             raise ValueError(f\"insufficient stock for {sku}\")\n-        # BUG: an error in a later line leaves prior decrements visible.\n+\n+    for sku, quantity in requests:\n         stock[sku] -= quantity\n-        reserved.append({\"sku\": sku, \"quantity\": quantity})\n-    return reserved\n+\n+    return [{\"sku\": sku, \"quantity\": quantity} for sku, quantity in requests]\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [
+          "bash"
+        ],
+        "missing_end": [],
+        "tool_calls": 9,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 17229.133,
+        "tool_calls": 9,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 20
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 437.8830830100924,
+  "test_exit_code": 0,
+  "test_stderr": "test_invalid_line_leaves_stock_unchanged (test_service.InventoryReservationTests.test_invalid_line_leaves_stock_unchanged) ... ok\ntest_late_insufficient_line_leaves_stock_unchanged (test_service.InventoryReservationTests.test_late_insufficient_line_leaves_stock_unchanged) ... ok\ntest_repeated_sku_is_checked_as_one_atomic_batch (test_service.InventoryReservationTests.test_repeated_sku_is_checked_as_one_atomic_batch) ... ok\ntest_reserves_every_valid_line_in_request_order (test_service.InventoryReservationTests.test_reserves_every_valid_line_in_request_order) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_bf4d208f1ae4",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 35,
+    "span_count": 17,
+    "trace_id": "trace_bf4d208f1ae4",
+    "valid": true
+  },
+  "trial_id": "inventory_reservation_atomicity_trial_003"
+}

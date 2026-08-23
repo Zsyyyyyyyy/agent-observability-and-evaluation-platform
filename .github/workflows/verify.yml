@@ -14,11 +14,12 @@ jobs:
           python-version: '3.11'
       - name: Verify Docker availability
         run: docker info
-      - name: Run deterministic test suite
-        run: make test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run complete offline verification
+        run: make verify
       - name: Run Docker sandbox integration tests
         run: make docker-test
       - name: Run expected-failure probes in Docker
         run: make failure-suite
-      - name: Validate all benchmark manifests
-        run: make manifest-check

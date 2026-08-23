@@ -1,0 +1,392 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "修复完成。\n\n改动（仅 `src/processor.py`）：\n\n- 逐行遍历 `rows`，对每条记录单独调用 `parse_record`。\n- 解析成功则追加到 `accepted`，保持原始顺序。\n- 捕获 `ValueError`，将 `{\"index\": index, \"reason\": str(error)}` 追加到 `rejected`，其中 `index` 是原始行号，`reason` 是 `parse_record` 给出的原因。\n- 单条非法记录不再中断整个批次。\n\n测试通过（`python -m unittest discover -s tests -v`，三个用例均 ok）。",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 9,
+    "denied_tool_attempts": 1,
+    "duplicate_read_rate": 0.25,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.3333333333333333,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 3,
+        "denied": 1,
+        "error": 0,
+        "ok": 2
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "read_file": {
+        "calls": 4,
+        "denied": 0,
+        "error": 0,
+        "ok": 4
+      }
+    },
+    "tool_calls": 9,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 0.8888888888888888,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 18
+  },
+  "changed_files": [
+    "src/processor.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 3,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_invalid_row_does_not_discard_neighboring_valid_rows (test_processor.BatchIsolationTests.test_invalid_row_does_not_discard_neighboring_valid_rows) ... ok\ntest_multiple_failures_keep_original_indexes (test_processor.BatchIsolationTests.test_multiple_failures_keep_original_indexes) ... ok\ntest_valid_rows_are_processed (test_processor.BatchIsolationTests.test_valid_rows_are_processed) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/processor.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 35,
+          "span_count": 17,
+          "trace_id": "trace_bcfce36cfb21",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_bcfce36cfb21"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 8,
+          "binary": false,
+          "deleted_lines": 2,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/processor.py"
+          ],
+          "patch": "diff --git a/src/processor.py b/src/processor.py\nindex dac3384..c7255df 100644\n--- a/src/processor.py\n+++ b/src/processor.py\n@@ -4,5 +4,11 @@ from src.records import parse_record\n def process_batch(rows):\n     \"\"\"Return accepted records and individual rejected rows.\"\"\"\n \n-    # BUG: one malformed row aborts the complete batch.\n-    return {\"accepted\": [parse_record(row) for row in rows], \"rejected\": []}\n+    accepted = []\n+    rejected = []\n+    for index, row in enumerate(rows):\n+        try:\n+            accepted.append(parse_record(row))\n+        except ValueError as error:\n+            rejected.append({\"index\": index, \"reason\": str(error)})\n+    return {\"accepted\": accepted, \"rejected\": rejected}\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [
+            "bash"
+          ],
+          "missing_end": [],
+          "tool_calls": 9,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 11419.793,
+          "tool_calls": 9,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 18
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/processor.py b/src/processor.py\nindex dac3384..c7255df 100644\n--- a/src/processor.py\n+++ b/src/processor.py\n@@ -4,5 +4,11 @@ from src.records import parse_record\n def process_batch(rows):\n     \"\"\"Return accepted records and individual rejected rows.\"\"\"\n \n-    # BUG: one malformed row aborts the complete batch.\n-    return {\"accepted\": [parse_record(row) for row in rows], \"rejected\": []}\n+    accepted = []\n+    rejected = []\n+    for index, row in enumerate(rows):\n+        try:\n+            accepted.append(parse_record(row))\n+        except ValueError as error:\n+            rejected.append({\"index\": index, \"reason\": str(error)})\n+    return {\"accepted\": accepted, \"rejected\": rejected}\n",
+  "git_evidence": {
+    "base_revision": "43f91ae2429437b83205a1cd77b09e42adf5af20",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/processor.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 969,
+    "prompt_tokens": 11512,
+    "total_tokens": 12481
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 26,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_invalid_row_does_not_discard_neighboring_valid_rows (test_processor.BatchIsolationTests.test_invalid_row_does_not_discard_neighboring_valid_rows) ... ok\ntest_multiple_failures_keep_original_indexes (test_processor.BatchIsolationTests.test_multiple_failures_keep_original_indexes) ... ok\ntest_valid_rows_are_processed (test_processor.BatchIsolationTests.test_valid_rows_are_processed) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/processor.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 35,
+        "span_count": 17,
+        "trace_id": "trace_bcfce36cfb21",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_bcfce36cfb21"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 8,
+        "binary": false,
+        "deleted_lines": 2,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/processor.py"
+        ],
+        "patch": "diff --git a/src/processor.py b/src/processor.py\nindex dac3384..c7255df 100644\n--- a/src/processor.py\n+++ b/src/processor.py\n@@ -4,5 +4,11 @@ from src.records import parse_record\n def process_batch(rows):\n     \"\"\"Return accepted records and individual rejected rows.\"\"\"\n \n-    # BUG: one malformed row aborts the complete batch.\n-    return {\"accepted\": [parse_record(row) for row in rows], \"rejected\": []}\n+    accepted = []\n+    rejected = []\n+    for index, row in enumerate(rows):\n+        try:\n+            accepted.append(parse_record(row))\n+        except ValueError as error:\n+            rejected.append({\"index\": index, \"reason\": str(error)})\n+    return {\"accepted\": accepted, \"rejected\": rejected}\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [
+          "bash"
+        ],
+        "missing_end": [],
+        "tool_calls": 9,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 11419.793,
+        "tool_calls": 9,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 18
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 352.0090830279514,
+  "test_exit_code": 0,
+  "test_stderr": "test_invalid_row_does_not_discard_neighboring_valid_rows (test_processor.BatchIsolationTests.test_invalid_row_does_not_discard_neighboring_valid_rows) ... ok\ntest_multiple_failures_keep_original_indexes (test_processor.BatchIsolationTests.test_multiple_failures_keep_original_indexes) ... ok\ntest_valid_rows_are_processed (test_processor.BatchIsolationTests.test_valid_rows_are_processed) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_bcfce36cfb21",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 35,
+    "span_count": 17,
+    "trace_id": "trace_bcfce36cfb21",
+    "valid": true
+  },
+  "trial_id": "batch_partial_failure_isolation_trial_002"
+}

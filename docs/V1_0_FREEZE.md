@@ -1,15 +1,15 @@
-# Regression Lab v1.0 Freeze
+# Regression Lab v1.0 目标冻结草案
 
 ## 定位
 
-**Regression Lab v1.0** 是一个 framework-neutral Agent regression evaluation and observability platform for reproducible version comparison。
+本文描述未来 v1.0 的目标契约，不表示当前 v0.2 已达到生产级稳定发布。Regression Lab 的目标是成为 framework-neutral Agent regression evaluation and observability platform for reproducible version comparison。
 
 它负责把同一 Benchmark Case 上的 Agent 版本变化，收敛为可复现、可审计的
 `Case × Trial × Version` 实验；不绑定任何 Agent 框架，也不将诊断结果变成自动根因推测。
 
 ## 冻结范围
 
-以下契约自 v1.0 起视为稳定接口。修改它们必须先提出版本化迁移方案、兼容策略和回归证据，不能以普通功能迭代的方式直接改变语义。
+以下契约计划自 v1.0 起视为稳定接口。当前 v0.2 已使用这些版本字段和兼容测试，但仍允许在提供迁移方案后修正设计。
 
 | 契约 | 冻结版本 | 稳定语义 |
 |---|---:|---|
@@ -27,7 +27,7 @@
 - 若确有必要修改冻结契约，必须发布新 schema/version，明确读取兼容与 Artifact 迁移策略，并保留旧版本回归测试。
 - 只要 Capability 或 Trace 证据不足，就返回 unavailable；不得以默认值、推测或 UI 补零改变历史事实。
 
-## v1.0 已验证边界
+## 进入 v1.0 冻结前已验证的边界
 
 - 内置 `react-agent`、通用 `external-command`、readonly replay 与故障探针；真实 LangGraph 示例通过 `external-command` 接入，不需要框架特判。
 - Hierarchical Trace、跨版本 Behavior Diff、Span-level Failure Attribution、只读 Console 和 Capability Contract 已端到端验证。

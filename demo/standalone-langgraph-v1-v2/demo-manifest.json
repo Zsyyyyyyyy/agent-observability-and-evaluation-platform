@@ -1,0 +1,76 @@
+{
+  "files": [
+    {
+      "path": "baseline/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_001/result.json",
+      "sha256": "sha256:07a202ae52485e951f42362d1377b7c4918716bbde30d720fe92d0223c022a7a"
+    },
+    {
+      "path": "baseline/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_001/trace.jsonl",
+      "sha256": "sha256:4d9d4a339d754cc0359aeb82b32c9cfe85117960e7d605aae22b17259973e5b7"
+    },
+    {
+      "path": "baseline/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_002/result.json",
+      "sha256": "sha256:76782d4922c1c598d03779efc12ce3946fc7f5885ab68ba0e1eb8477da7fd4a2"
+    },
+    {
+      "path": "baseline/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_002/trace.jsonl",
+      "sha256": "sha256:537dfc511a4392c4f71d8fd403b9ad6d2d560d822212cab648607f78fe240f68"
+    },
+    {
+      "path": "baseline/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_003/result.json",
+      "sha256": "sha256:7a332e4e931b317c855a66e5168865a668bfa39aa446549dd998f140d3691cc0"
+    },
+    {
+      "path": "baseline/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_003/trace.jsonl",
+      "sha256": "sha256:f4e2f14b6b102760d021f5779cbb511ac3de88b9d3ea4cd4680b00bbf6d94ea7"
+    },
+    {
+      "path": "candidate/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_001/result.json",
+      "sha256": "sha256:3907ea02e6ae8eb481488ac457532b23abcf3aeeda6c82c388e589cc30a252dd"
+    },
+    {
+      "path": "candidate/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_001/trace.jsonl",
+      "sha256": "sha256:d924dcf8cb37e1e4f6222228e5c1913f6c4b69552b42963757f1a874690abb0a"
+    },
+    {
+      "path": "candidate/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_002/result.json",
+      "sha256": "sha256:49a9e611e212a27dd2ebca3cc32dbf4e035a6e7a557453fade157ead2e321003"
+    },
+    {
+      "path": "candidate/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_002/trace.jsonl",
+      "sha256": "sha256:6fc1d12c051dc170a7e5c27a72ba1aafde5a22a5459dc05d0a42b9d7fd95f4a8"
+    },
+    {
+      "path": "candidate/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_003/result.json",
+      "sha256": "sha256:3a6fa52aec639df14776883c6802f4886dabb7e75a1e768fa50575648b53ec12"
+    },
+    {
+      "path": "candidate/smoke_calculator_empty_input/smoke_calculator_empty_input_trial_003/trace.jsonl",
+      "sha256": "sha256:b34b2c7427ec489e23090bb31780fe3754be6a3b2520679ab8e17c561fc97672"
+    },
+    {
+      "path": "evolution-catalog.json",
+      "sha256": "sha256:61953ed5b4679767550398a5a7c805c6aa6f29596b1fae2d9790153bff079a04"
+    },
+    {
+      "path": "execution-plan.json",
+      "sha256": "sha256:5e311470d88abb59ad5dd4a4cb4387feade865074f4d0f599d1e983dbc44c4a7"
+    },
+    {
+      "path": "experiment.json",
+      "sha256": "sha256:71958cc0d0a0df8382f07e7c32f674bfdab7c9b9bb3fd13bf81a217dbee9184b"
+    },
+    {
+      "path": "gate-report.json",
+      "sha256": "sha256:7cd54d6f0d95d5c0ebfc58514b080d15e068a6272b98fb46e614b427d8d878d4"
+    },
+    {
+      "path": "protocol.json",
+      "sha256": "sha256:0ad429c71f505812f25bdf225a1b889e7da8ab628a8f7b57e8f471739ff9164f"
+    }
+  ],
+  "kind": "regression-lab-readonly-demo",
+  "note": "Read-only demo export. Source paths, local secrets, Attempts and Worktrees are excluded.",
+  "schema_version": 1,
+  "trial_count": 6
+}

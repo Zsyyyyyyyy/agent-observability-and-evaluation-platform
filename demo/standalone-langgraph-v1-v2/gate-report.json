@@ -1,0 +1,835 @@
+{
+  "baseline_id": "baseline",
+  "candidate_id": "candidate",
+  "decision": {
+    "average_model_tokens_delta": null,
+    "correctness_or_reliability_regressed": false,
+    "hard_blocking_failures": [
+      "paired_case_coverage",
+      "candidate_completion_rate_minimum",
+      "candidate_evaluation_pass_rate_minimum",
+      "average_tool_calls_limit",
+      "average_model_tokens_limit"
+    ],
+    "message": "blocked by hard Gate rules",
+    "not_available": [
+      "average_tool_calls_limit",
+      "average_model_tokens_limit"
+    ],
+    "status": "hold",
+    "token_savings_cannot_offset": false
+  },
+  "diagnostics": {
+    "average_duration_ms": {
+      "delta": 14806.817000000003,
+      "note": "diagnostic only; average latency does not block promotion",
+      "status": "regressed"
+    },
+    "blocking": false,
+    "model_tokens": {
+      "average_delta": null,
+      "p95_delta": null,
+      "status": "not_available"
+    },
+    "p50_duration_ms": {
+      "delta": 19442.835999999996,
+      "status": "regressed"
+    },
+    "p95_duration_ms": {
+      "blocking": false,
+      "delta": 31973.931000000004,
+      "note": "tail-latency signal; inspect slow Trials before promotion",
+      "status": "regressed",
+      "threshold": 0.0
+    }
+  },
+  "evidence": {
+    "comparison": {
+      "baseline": {
+        "avg_added_lines": 2.0,
+        "avg_deleted_lines": 0.0,
+        "avg_duration_ms": 43281.98933333333,
+        "avg_model_tokens": null,
+        "avg_tool_calls": null,
+        "completion_rate": 0.3333333333333333,
+        "diff_policy_violation_rate": 0.0,
+        "evaluation_pass_rate": 0.3333333333333333,
+        "infra_failed_rate": 0.0,
+        "model_failed_rate": 0.0,
+        "p50_duration_ms": 39543.194,
+        "p50_model_tokens": null,
+        "p95_duration_ms": 56382.248,
+        "p95_model_tokens": null,
+        "path_policy_violation_rate": 0.0,
+        "test_pass_rate": 0.3333333333333333,
+        "trace_incomplete_rate": 0.0,
+        "trial_count": 3.0
+      },
+      "behavior": {
+        "baseline": {
+          "availability": {
+            "duplicate_reads": false,
+            "edit_before_read": false,
+            "repeated_tool_calls": false,
+            "test_retries": false,
+            "tool_outcomes": false
+          },
+          "denied_tool_attempts": 0,
+          "duplicate_read_rate": null,
+          "edit_before_read_count": 0,
+          "evidence_availability": {
+            "duplicate_reads": "unsupported",
+            "edit_before_read": "unsupported",
+            "repeated_tool_calls": "unsupported",
+            "test_retries": "unsupported",
+            "tool_outcomes": "unsupported"
+          },
+          "instrumented_trial_count": 3,
+          "repeated_tool_call_rate": null,
+          "tool_error_rate": null,
+          "tool_success_rate": null,
+          "trial_count": 3,
+          "unavailable": {
+            "test_retry_count": "no Trial emitted available test_retry evidence"
+          },
+          "verification_coverage": 1.0
+        },
+        "candidate": {
+          "availability": {
+            "duplicate_reads": false,
+            "edit_before_read": false,
+            "repeated_tool_calls": false,
+            "test_retries": false,
+            "tool_outcomes": false
+          },
+          "denied_tool_attempts": 0,
+          "duplicate_read_rate": null,
+          "edit_before_read_count": 0,
+          "evidence_availability": {
+            "duplicate_reads": "unsupported",
+            "edit_before_read": "unsupported",
+            "repeated_tool_calls": "unsupported",
+            "test_retries": "unsupported",
+            "tool_outcomes": "unsupported"
+          },
+          "instrumented_trial_count": 3,
+          "repeated_tool_call_rate": null,
+          "tool_error_rate": null,
+          "tool_success_rate": null,
+          "trial_count": 3,
+          "unavailable": {
+            "test_retry_count": "no Trial emitted available test_retry evidence"
+          },
+          "verification_coverage": 1.0
+        }
+      },
+      "behavior_diff": {
+        "added_patterns": [],
+        "availability": {
+          "behavior_diff": true,
+          "denied_tool_call": false,
+          "duplicate_read": false,
+          "duplicate_reads": false,
+          "duration_ms": true,
+          "failed_tool_call": false,
+          "input_tokens": false,
+          "model_calls": false,
+          "output_tokens": false,
+          "post_terminal_call": true,
+          "repeated_tool_call": false,
+          "repeated_tool_calls": false,
+          "test_retry": false,
+          "tool_calls": false,
+          "tool_retry": false,
+          "tool_success_rate": false,
+          "total_tokens": false
+        },
+        "case_diffs": [
+          {
+            "case_id": "smoke_calculator_empty_input",
+            "metrics": {
+              "duplicate_reads": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "duration_ms": {
+                "available_trial_count": 3,
+                "classification": "regressed",
+                "median_delta": 2603.7819999999992
+              },
+              "input_tokens": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "model_calls": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "output_tokens": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "repeated_tool_calls": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "tool_calls": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "tool_success_rate": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              },
+              "total_tokens": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "median_delta": null
+              }
+            },
+            "paired_trial_count": 3,
+            "patterns": {
+              "denied_tool_call": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "delta": null
+              },
+              "duplicate_read": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "delta": null
+              },
+              "failed_tool_call": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "delta": null
+              },
+              "post_terminal_call": {
+                "available_trial_count": 3,
+                "classification": "unchanged",
+                "delta": 0
+              },
+              "repeated_tool_call": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "delta": null
+              },
+              "test_retry": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "delta": null
+              },
+              "tool_retry": {
+                "available_trial_count": 0,
+                "classification": "not_available",
+                "delta": null
+              }
+            }
+          }
+        ],
+        "deltas": [
+          {
+            "added_patterns": [],
+            "baseline_version": "v1",
+            "candidate_version": "v2",
+            "case_id": "smoke_calculator_empty_input",
+            "delta": {
+              "duplicate_reads": null,
+              "duration_ms": 48812.985,
+              "input_tokens": null,
+              "model_calls": null,
+              "output_tokens": null,
+              "repeated_tool_calls": null,
+              "tool_calls": null,
+              "tool_success_rate": null,
+              "total_tokens": null
+            },
+            "pattern_delta": {
+              "denied_tool_call": null,
+              "duplicate_read": null,
+              "failed_tool_call": null,
+              "post_terminal_call": 0,
+              "repeated_tool_call": null,
+              "test_retry": null,
+              "tool_retry": null
+            },
+            "removed_patterns": [],
+            "trial_index": 1
+          },
+          {
+            "added_patterns": [],
+            "baseline_version": "v1",
+            "candidate_version": "v2",
+            "case_id": "smoke_calculator_empty_input",
+            "delta": {
+              "duplicate_reads": null,
+              "duration_ms": 2603.7819999999992,
+              "input_tokens": null,
+              "model_calls": null,
+              "output_tokens": null,
+              "repeated_tool_calls": null,
+              "tool_calls": null,
+              "tool_success_rate": null,
+              "total_tokens": null
+            },
+            "pattern_delta": {
+              "denied_tool_call": null,
+              "duplicate_read": null,
+              "failed_tool_call": null,
+              "post_terminal_call": 0,
+              "repeated_tool_call": null,
+              "test_retry": null,
+              "tool_retry": null
+            },
+            "removed_patterns": [],
+            "trial_index": 2
+          },
+          {
+            "added_patterns": [],
+            "baseline_version": "v1",
+            "candidate_version": "v2",
+            "case_id": "smoke_calculator_empty_input",
+            "delta": {
+              "duplicate_reads": null,
+              "duration_ms": -6996.315999999999,
+              "input_tokens": null,
+              "model_calls": null,
+              "output_tokens": null,
+              "repeated_tool_calls": null,
+              "tool_calls": null,
+              "tool_success_rate": null,
+              "total_tokens": null
+            },
+            "pattern_delta": {
+              "denied_tool_call": null,
+              "duplicate_read": null,
+              "failed_tool_call": null,
+              "post_terminal_call": 0,
+              "repeated_tool_call": null,
+              "test_retry": null,
+              "tool_retry": null
+            },
+            "removed_patterns": [],
+            "trial_index": 3
+          }
+        ],
+        "diagnostic_only": true,
+        "paired_trial_count": 3,
+        "removed_patterns": [],
+        "schema_version": 1,
+        "summary": {
+          "metrics": {
+            "duration_ms": {
+              "available_case_count": 1,
+              "improved_cases": 0,
+              "median_delta": 2603.7819999999992,
+              "regressed_cases": 1,
+              "unchanged_cases": 0
+            }
+          },
+          "patterns": {
+            "post_terminal_call": {
+              "available_case_count": 1,
+              "improved_cases": 0,
+              "regressed_cases": 0,
+              "unchanged_cases": 1
+            }
+          }
+        },
+        "unavailable": {
+          "denied_tool_call": "no paired Trial pattern measurements",
+          "duplicate_read": "no paired Trial pattern measurements",
+          "duplicate_reads": "no paired Trial measurements",
+          "failed_tool_call": "no paired Trial pattern measurements",
+          "input_tokens": "no paired Trial measurements",
+          "model_calls": "no paired Trial measurements",
+          "output_tokens": "no paired Trial measurements",
+          "repeated_tool_call": "no paired Trial pattern measurements",
+          "repeated_tool_calls": "no paired Trial measurements",
+          "test_retry": "no paired Trial pattern measurements",
+          "tool_calls": "no paired Trial measurements",
+          "tool_retry": "no paired Trial pattern measurements",
+          "tool_success_rate": "no paired Trial measurements",
+          "total_tokens": "no paired Trial measurements"
+        },
+        "unpaired_baseline_trial_count": 0,
+        "unpaired_candidate_trial_count": 0,
+        "version": 1
+      },
+      "candidate": {
+        "avg_added_lines": 2.3333333333333335,
+        "avg_deleted_lines": 0.3333333333333333,
+        "avg_duration_ms": 58088.806333333334,
+        "avg_model_tokens": null,
+        "avg_tool_calls": null,
+        "completion_rate": 0.6666666666666666,
+        "diff_policy_violation_rate": 0.0,
+        "evaluation_pass_rate": 0.6666666666666666,
+        "infra_failed_rate": 0.0,
+        "model_failed_rate": 0.0,
+        "p50_duration_ms": 58986.03,
+        "p50_model_tokens": null,
+        "p95_duration_ms": 88356.179,
+        "p95_model_tokens": null,
+        "path_policy_violation_rate": 0.0,
+        "test_pass_rate": 0.6666666666666666,
+        "trace_incomplete_rate": 0.0,
+        "trial_count": 3.0
+      },
+      "case_comparisons": [
+        {
+          "baseline": {
+            "all_pass_at_k": false,
+            "trial_count": 3,
+            "valid_pass_count": 1
+          },
+          "candidate": {
+            "all_pass_at_k": false,
+            "trial_count": 3,
+            "valid_pass_count": 2
+          },
+          "case_id": "smoke_calculator_empty_input",
+          "paired_trial_count": 3,
+          "paired_trials": [
+            {
+              "baseline": {
+                "duration_ms": 39543.194,
+                "model_tokens": null,
+                "status": "agent_failed",
+                "tool_calls": null,
+                "trial_index": 1,
+                "valid_pass": false
+              },
+              "candidate": {
+                "duration_ms": 88356.179,
+                "model_tokens": null,
+                "status": "completed",
+                "tool_calls": null,
+                "trial_index": 1,
+                "valid_pass": true
+              },
+              "delta": {
+                "duration_ms": 48812.985,
+                "model_tokens": null,
+                "tool_calls": null
+              },
+              "trial_index": 1
+            },
+            {
+              "baseline": {
+                "duration_ms": 56382.248,
+                "model_tokens": null,
+                "status": "completed",
+                "tool_calls": null,
+                "trial_index": 2,
+                "valid_pass": true
+              },
+              "candidate": {
+                "duration_ms": 58986.03,
+                "model_tokens": null,
+                "status": "completed",
+                "tool_calls": null,
+                "trial_index": 2,
+                "valid_pass": true
+              },
+              "delta": {
+                "duration_ms": 2603.7819999999992,
+                "model_tokens": null,
+                "tool_calls": null
+              },
+              "trial_index": 2
+            },
+            {
+              "baseline": {
+                "duration_ms": 33920.526,
+                "model_tokens": null,
+                "status": "agent_failed",
+                "tool_calls": null,
+                "trial_index": 3,
+                "valid_pass": false
+              },
+              "candidate": {
+                "duration_ms": 26924.21,
+                "model_tokens": null,
+                "status": "agent_failed",
+                "tool_calls": null,
+                "trial_index": 3,
+                "valid_pass": false
+              },
+              "delta": {
+                "duration_ms": -6996.315999999999,
+                "model_tokens": null,
+                "tool_calls": null
+              },
+              "trial_index": 3
+            }
+          ]
+        }
+      ],
+      "classification": {
+        "improved": [
+          "completion_rate",
+          "evaluation_pass_rate",
+          "test_pass_rate"
+        ],
+        "regressed": [
+          "avg_duration_ms"
+        ],
+        "unchanged": [
+          "model_failed_rate",
+          "trace_incomplete_rate",
+          "infra_failed_rate",
+          "path_policy_violation_rate",
+          "diff_policy_violation_rate"
+        ]
+      },
+      "delta": {
+        "avg_added_lines": 0.3333333333333335,
+        "avg_deleted_lines": 0.3333333333333333,
+        "avg_duration_ms": 14806.817000000003,
+        "completion_rate": 0.3333333333333333,
+        "diff_policy_violation_rate": 0.0,
+        "evaluation_pass_rate": 0.3333333333333333,
+        "infra_failed_rate": 0.0,
+        "model_failed_rate": 0.0,
+        "p50_duration_ms": 19442.835999999996,
+        "p95_duration_ms": 31973.931000000004,
+        "path_policy_violation_rate": 0.0,
+        "test_pass_rate": 0.3333333333333333,
+        "trace_incomplete_rate": 0.0
+      },
+      "efficiency": {
+        "baseline": {
+          "p50_duration_ms": 39543.194,
+          "p50_model_tokens": null,
+          "p95_duration_ms": 56382.248,
+          "p95_model_tokens": null
+        },
+        "candidate": {
+          "p50_duration_ms": 58986.03,
+          "p50_model_tokens": null,
+          "p95_duration_ms": 88356.179,
+          "p95_model_tokens": null
+        }
+      },
+      "failure_attribution": {
+        "baseline": {
+          "agent_quality": {
+            "eligible_trial_count": 3,
+            "excluded_external_failure_count": 0,
+            "excludes": [
+              "model",
+              "infrastructure"
+            ],
+            "includes": [
+              "agent",
+              "evidence",
+              "policy"
+            ],
+            "valid_pass_count": 1,
+            "valid_pass_rate": 0.3333333333333333
+          },
+          "attributed_trial_count": 3,
+          "counts": {
+            "agent": 2,
+            "evidence": 0,
+            "infrastructure": 0,
+            "model": 0,
+            "passed": 1,
+            "policy": 0
+          },
+          "raw_reliability": {
+            "failure_count": 2,
+            "includes": [
+              "agent",
+              "model",
+              "infrastructure",
+              "evidence",
+              "policy"
+            ],
+            "valid_pass_count": 1,
+            "valid_pass_rate": 0.3333333333333333
+          },
+          "reasons": {
+            "task_test_failed_or_not_run": 2
+          },
+          "trial_count": 3,
+          "unavailable": {}
+        },
+        "candidate": {
+          "agent_quality": {
+            "eligible_trial_count": 3,
+            "excluded_external_failure_count": 0,
+            "excludes": [
+              "model",
+              "infrastructure"
+            ],
+            "includes": [
+              "agent",
+              "evidence",
+              "policy"
+            ],
+            "valid_pass_count": 2,
+            "valid_pass_rate": 0.6666666666666666
+          },
+          "attributed_trial_count": 3,
+          "counts": {
+            "agent": 1,
+            "evidence": 0,
+            "infrastructure": 0,
+            "model": 0,
+            "passed": 2,
+            "policy": 0
+          },
+          "raw_reliability": {
+            "failure_count": 1,
+            "includes": [
+              "agent",
+              "model",
+              "infrastructure",
+              "evidence",
+              "policy"
+            ],
+            "valid_pass_count": 2,
+            "valid_pass_rate": 0.6666666666666666
+          },
+          "reasons": {
+            "task_test_failed_or_not_run": 1
+          },
+          "trial_count": 3,
+          "unavailable": {}
+        }
+      },
+      "metrics_version": 3,
+      "reliability": {
+        "baseline": {
+          "all_pass_at_k": 0.0,
+          "all_pass_at_k_case_count": 0,
+          "case_count": 1,
+          "eligible_case_count": 1,
+          "flaky_case_count": 1,
+          "flaky_case_rate": 1.0,
+          "required_trials_per_case": 3,
+          "unavailable_cases": []
+        },
+        "candidate": {
+          "all_pass_at_k": 0.0,
+          "all_pass_at_k_case_count": 0,
+          "case_count": 1,
+          "eligible_case_count": 1,
+          "flaky_case_count": 1,
+          "flaky_case_rate": 1.0,
+          "required_trials_per_case": 3,
+          "unavailable_cases": []
+        },
+        "delta": {
+          "all_pass_at_k": 0.0,
+          "flaky_case_rate": 0.0
+        }
+      },
+      "statistics": {
+        "conclusion": {
+          "level": "limited_coverage",
+          "reason": "1 eligible Cases; target is at least 8 before a broad performance claim."
+        },
+        "confidence_level": 0.95,
+        "eligible_case_count": 1,
+        "excluded_paired_trial_count": 2,
+        "method": "clustered_case_bootstrap",
+        "metrics": {
+          "duration_ms": {
+            "available": true,
+            "case_outcomes": {
+              "candidate_higher": 1,
+              "candidate_lower": 0,
+              "tied": 0
+            },
+            "ci95": {
+              "high": 2603.7819999999992,
+              "low": 2603.7819999999992
+            },
+            "direction": "likely_higher",
+            "paired_trial_count": 1,
+            "point_estimate_mean_delta": 2603.7819999999992,
+            "point_estimate_median_delta": 2603.7819999999992
+          },
+          "model_tokens": {
+            "available": false,
+            "reason": "no valid paired measurements"
+          },
+          "tool_calls": {
+            "available": false,
+            "reason": "no valid paired measurements"
+          }
+        },
+        "resamples": 2000,
+        "seed": 20260812
+      }
+    }
+  },
+  "passed": false,
+  "protocol": {
+    "comparability": {
+      "differences": [],
+      "level": "strict"
+    },
+    "fingerprint": "sha256:007ae894c50941517f977c41a5a7f164b7dce5ae52815869aadf4a9b520239b5"
+  },
+  "rules": [
+    {
+      "actual": 1.0,
+      "expected": "== 1.0",
+      "message": "experiment protocol comparability is 'strict'",
+      "name": "protocol_strict_comparability",
+      "passed": true
+    },
+    {
+      "actual": 1.0,
+      "expected": ">= 8",
+      "message": "Cases with complete baseline/candidate paired evidence",
+      "name": "paired_case_coverage",
+      "passed": false
+    },
+    {
+      "actual": 0.0,
+      "expected": "== 0 incomplete Cases",
+      "message": "each Case requires at least 3 baseline, candidate, and paired Trials",
+      "name": "paired_trial_coverage",
+      "passed": true
+    },
+    {
+      "actual": 0.6666666666666666,
+      "expected": ">= 1.0",
+      "message": "candidate completion rate absolute minimum",
+      "name": "candidate_completion_rate_minimum",
+      "passed": false
+    },
+    {
+      "actual": 0.6666666666666666,
+      "expected": ">= 1.0",
+      "message": "candidate evaluation pass rate absolute minimum",
+      "name": "candidate_evaluation_pass_rate_minimum",
+      "passed": false
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate model failed rate absolute maximum",
+      "name": "candidate_model_failed_rate_limit",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate trace incomplete rate absolute maximum",
+      "name": "candidate_trace_incomplete_rate_limit",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate infrastructure failed rate absolute maximum",
+      "name": "candidate_infra_failed_rate_limit",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate path policy violation rate absolute maximum",
+      "name": "candidate_path_policy_violation_rate_limit",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate diff policy violation rate absolute maximum",
+      "name": "candidate_diff_policy_violation_rate_limit",
+      "passed": true
+    },
+    {
+      "actual": 0.3333333333333333,
+      "expected": ">= 0.0",
+      "message": "candidate - baseline completion rate",
+      "name": "completion_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.3333333333333333,
+      "expected": ">= 0.0",
+      "message": "candidate - baseline evaluation pass rate",
+      "name": "evaluation_pass_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate - baseline model failed rate",
+      "name": "model_failed_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate - baseline trace incomplete rate",
+      "name": "trace_incomplete_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate - baseline infrastructure failed rate",
+      "name": "infra_failed_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate - baseline path policy violation rate",
+      "name": "path_policy_violation_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate - baseline diff policy violation rate",
+      "name": "diff_policy_violation_rate_non_regression",
+      "passed": true
+    },
+    {
+      "actual": null,
+      "expected": "available cost measurements",
+      "message": "baseline or candidate tool-call average is not available",
+      "name": "average_tool_calls_limit",
+      "passed": false
+    },
+    {
+      "actual": null,
+      "expected": "available cost measurements",
+      "message": "baseline or candidate token average is not available",
+      "name": "average_model_tokens_limit",
+      "passed": false
+    },
+    {
+      "actual": 0.0,
+      "expected": ">= 0.0",
+      "message": "candidate - baseline all-pass@k consistency",
+      "name": "all_pass_at_3_non_regression",
+      "passed": true
+    },
+    {
+      "actual": 0.0,
+      "expected": "<= 0.0",
+      "message": "candidate - baseline flaky case rate",
+      "name": "flaky_case_rate_non_regression",
+      "passed": true
+    }
+  ],
+  "schema_version": 3
+}

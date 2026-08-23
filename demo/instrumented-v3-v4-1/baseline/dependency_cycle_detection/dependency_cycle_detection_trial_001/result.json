@@ -1,0 +1,392 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "The fix is complete. The output truncation is a tool display artifact, but the visible results confirm the direct-cycle test passes, and I verified the logic manually for all three test cases.\n\n## Change made\n\n`src/resolver.py` — added cycle detection to the DFS in `dependency_order`:\n\n- A `visiting` set tracks nodes currently on the recursion stack.\n- If a node is encountered while already in `visiting`, a direct or indirect cycle exists, so `src.errors.DependencyCycleError` is raised.\n- Completed nodes are still skipped, preserving deterministic dependency-first order without repeating shared dependencies.",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 11,
+    "denied_tool_attempts": 1,
+    "duplicate_read_rate": 0.0,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.45454545454545453,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 5,
+        "denied": 1,
+        "error": 0,
+        "ok": 4
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 3,
+        "denied": 0,
+        "error": 0,
+        "ok": 3
+      }
+    },
+    "tool_calls": 11,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 0.9090909090909091,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 18
+  },
+  "changed_files": [
+    "src/resolver.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 3,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_direct_cycle_raises_domain_error (test_resolver.DependencyOrderTests.test_direct_cycle_raises_domain_error) ... ok\ntest_returns_dependencies_before_the_root (test_resolver.DependencyOrderTests.test_returns_dependencies_before_the_root) ... ok\ntest_shared_dependencies_are_not_repeated (test_resolver.DependencyOrderTests.test_shared_dependencies_are_not_repeated) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/resolver.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 43,
+          "span_count": 21,
+          "trace_id": "trace_b682678fe291",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_b682678fe291"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 7,
+          "binary": false,
+          "deleted_lines": 1,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/resolver.py"
+          ],
+          "patch": "diff --git a/src/resolver.py b/src/resolver.py\nindex cc6248e..aefdec3 100644\n--- a/src/resolver.py\n+++ b/src/resolver.py\n@@ -6,13 +6,19 @@ from src.errors import DependencyCycleError\n def dependency_order(graph, root):\n     order = []\n     completed = set()\n+    visiting = set()\n \n     def visit(node):\n         if node in completed:\n             return\n-        # BUG: a node being visited is not tracked, so cycles recurse forever.\n+        if node in visiting:\n+            raise DependencyCycleError(\n+                \"dependency cycle detected involving node %r\" % (node,)\n+            )\n+        visiting.add(node)\n         for dependency in graph.get(node, []):\n             visit(dependency)\n+        visiting.remove(node)\n         completed.add(node)\n         order.append(node)\n \n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [
+            "bash"
+          ],
+          "missing_end": [],
+          "tool_calls": 11,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 24939.989,
+          "tool_calls": 11,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 18
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/resolver.py b/src/resolver.py\nindex cc6248e..aefdec3 100644\n--- a/src/resolver.py\n+++ b/src/resolver.py\n@@ -6,13 +6,19 @@ from src.errors import DependencyCycleError\n def dependency_order(graph, root):\n     order = []\n     completed = set()\n+    visiting = set()\n \n     def visit(node):\n         if node in completed:\n             return\n-        # BUG: a node being visited is not tracked, so cycles recurse forever.\n+        if node in visiting:\n+            raise DependencyCycleError(\n+                \"dependency cycle detected involving node %r\" % (node,)\n+            )\n+        visiting.add(node)\n         for dependency in graph.get(node, []):\n             visit(dependency)\n+        visiting.remove(node)\n         completed.add(node)\n         order.append(node)\n \n",
+  "git_evidence": {
+    "base_revision": "3d81a1b374ee0bb3562704d4c86dd71d7cd9590b",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/resolver.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 2070,
+    "prompt_tokens": 16074,
+    "total_tokens": 18144
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 48,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_direct_cycle_raises_domain_error (test_resolver.DependencyOrderTests.test_direct_cycle_raises_domain_error) ... ok\ntest_returns_dependencies_before_the_root (test_resolver.DependencyOrderTests.test_returns_dependencies_before_the_root) ... ok\ntest_shared_dependencies_are_not_repeated (test_resolver.DependencyOrderTests.test_shared_dependencies_are_not_repeated) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/resolver.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 43,
+        "span_count": 21,
+        "trace_id": "trace_b682678fe291",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_b682678fe291"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 7,
+        "binary": false,
+        "deleted_lines": 1,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/resolver.py"
+        ],
+        "patch": "diff --git a/src/resolver.py b/src/resolver.py\nindex cc6248e..aefdec3 100644\n--- a/src/resolver.py\n+++ b/src/resolver.py\n@@ -6,13 +6,19 @@ from src.errors import DependencyCycleError\n def dependency_order(graph, root):\n     order = []\n     completed = set()\n+    visiting = set()\n \n     def visit(node):\n         if node in completed:\n             return\n-        # BUG: a node being visited is not tracked, so cycles recurse forever.\n+        if node in visiting:\n+            raise DependencyCycleError(\n+                \"dependency cycle detected involving node %r\" % (node,)\n+            )\n+        visiting.add(node)\n         for dependency in graph.get(node, []):\n             visit(dependency)\n+        visiting.remove(node)\n         completed.add(node)\n         order.append(node)\n \n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [
+          "bash"
+        ],
+        "missing_end": [],
+        "tool_calls": 11,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 24939.989,
+        "tool_calls": 11,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 18
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 306.6447500605136,
+  "test_exit_code": 0,
+  "test_stderr": "test_direct_cycle_raises_domain_error (test_resolver.DependencyOrderTests.test_direct_cycle_raises_domain_error) ... ok\ntest_returns_dependencies_before_the_root (test_resolver.DependencyOrderTests.test_returns_dependencies_before_the_root) ... ok\ntest_shared_dependencies_are_not_repeated (test_resolver.DependencyOrderTests.test_shared_dependencies_are_not_repeated) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_b682678fe291",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 43,
+    "span_count": 21,
+    "trace_id": "trace_b682678fe291",
+    "valid": true
+  },
+  "trial_id": "dependency_cycle_detection_trial_001"
+}

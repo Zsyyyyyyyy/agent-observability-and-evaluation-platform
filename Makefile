@@ -5,12 +5,14 @@ REAL_OUTPUT_DIR ?= .runtime/react-smoke
 LANGGRAPH_PYTHON ?= .runtime/langgraph-integration-venv/bin/python
 CONSOLE_HOST ?= 127.0.0.1
 CONSOLE_PORT ?= 8765
+DEMO_RUNTIME ?= demo/instrumented-v3-v4-1
 
 .DEFAULT_GOAL := help
-.PHONY: help test docker-test manifest-check replay-dry-run real-smoke external-real-smoke langgraph-integration external-experiment external-evolution external-statistical-evolution external-v4-preexperiment external-v4-1-preexperiment external-v4-1-benchmark audit-v4-1-benchmark-v2 external-v4-1-benchmark-v2-gate audit-v4-1-benchmark-v2 external-three-arm-benchmark external-three-arm-gates audit-three-arm-benchmark external-v3-negative-control external-v3-negative-gate audit-v3-negative-control-v2 external-v3-negative-gate-v2 audit-v3-negative-control-v2 external-v3-negative-control-benchmark-v2 external-v3-negative-control-benchmark-v2-gate audit-v3-negative-control-benchmark-v2 apply-external-lineage console experiment-report gate failure-suite
+.PHONY: help verify test docker-test manifest-check replay-dry-run real-smoke external-real-smoke langgraph-integration external-experiment external-evolution external-statistical-evolution external-v4-preexperiment external-v4-1-preexperiment external-v4-1-benchmark audit-v4-1-benchmark-v2 external-v4-1-benchmark-v2-gate audit-v4-1-benchmark-v2 external-three-arm-benchmark external-three-arm-gates audit-three-arm-benchmark external-v3-negative-control external-v3-negative-gate audit-v3-negative-control-v2 external-v3-negative-gate-v2 audit-v3-negative-control-v2 audit-v3-negative-control-benchmark-v2 external-v3-negative-control-benchmark-v2-gate audit-v3-negative-control-benchmark-v2 apply-external-lineage console studio offline-demo verify-runtime experiment-report gate failure-suite
 
 help:
 	@printf '%s\n' 'Targets:' \
+	  '  make verify            Run the complete offline contributor verification.' \
 	  '  make test              Run deterministic unit tests (Docker tests skipped).' \
 	  '  make docker-test       Run Docker sandbox integration tests.' \
 	  '  make manifest-check    Validate and expand the core benchmark manifests.' \
@@ -31,7 +33,18 @@ help:
 	  '  make external-v3-negative-control-benchmark-v2 Run the 11-case negative control (requires model env).' \
 	  '  make audit-v4-1-benchmark Verify the existing V4.1 benchmark artifacts offline.' \
 	  '  make apply-external-lineage Apply the reviewed external-Agent version lineage locally.' \
-	  '  make console           Serve the read-only local observability console.'
+	  '  make console           Serve the read-only local observability console.' \
+	  '  make studio            Launch the local controlled Experiment form.' \
+	  '  make offline-demo      Open the bundled, read-only instrumented Demo.' \
+	  '  make verify-runtime RUNTIME=<path>  Verify a complete local Experiment Artifact.'
+
+verify: test manifest-check
+	$(PYTHON) -m compileall -q src scripts adapters tests
+	node --check web/app.js
+	node --check web/studio.js
+	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/export_demo_runtime.py --verify demo/instrumented-v3-v4-1
+	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/export_demo_runtime.py --verify demo/standalone-langgraph-v1-v2
+	git diff --check
 
 test:
 	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) -m unittest discover -s tests -q
@@ -380,3 +393,14 @@ failure-suite:
 
 console:
 	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/serve_dashboard.py --runtime $(RUNTIME) --host $(CONSOLE_HOST) --port $(CONSOLE_PORT)
+
+studio:
+	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/serve_studio.py --port 8764
+
+offline-demo:
+	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/serve_dashboard.py \
+	  --runtime $(DEMO_RUNTIME) --host $(CONSOLE_HOST) --port $(CONSOLE_PORT)
+
+verify-runtime:
+	@test -f "$(RUNTIME)/experiment.json" || (echo 'RUNTIME must point to a complete Experiment directory.' >&2; exit 2)
+	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/regression_lab.py experiment verify --runtime "$(RUNTIME)"

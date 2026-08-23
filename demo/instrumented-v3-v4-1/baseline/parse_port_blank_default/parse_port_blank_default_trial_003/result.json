@@ -1,0 +1,388 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "Fixed `parse_port` in `src/config.py`: empty string now returns default port 8000, while numeric strings behave unchanged. All tests pass.",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 6,
+    "denied_tool_attempts": 0,
+    "duplicate_read_rate": 0.0,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.16666666666666666,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      }
+    },
+    "tool_calls": 6,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 1.0,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 12
+  },
+  "changed_files": [
+    "src/config.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 2,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_blank_value_uses_default_port (test_config.ParsePortTests.test_blank_value_uses_default_port) ... ok\ntest_valid_port_is_unchanged (test_config.ParsePortTests.test_valid_port_is_unchanged) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/config.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 25,
+          "span_count": 12,
+          "trace_id": "trace_174e0d71a886",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_174e0d71a886"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 2,
+          "binary": false,
+          "deleted_lines": 0,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/config.py"
+          ],
+          "patch": "diff --git a/src/config.py b/src/config.py\nindex a8a7c1d..81712c9 100644\n--- a/src/config.py\n+++ b/src/config.py\n@@ -1,2 +1,4 @@\n def parse_port(value):\n+    if value == \"\":\n+        return 8000\n     return int(value)\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [],
+          "missing_end": [],
+          "tool_calls": 6,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 7291.376,
+          "tool_calls": 6,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 12
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/config.py b/src/config.py\nindex a8a7c1d..81712c9 100644\n--- a/src/config.py\n+++ b/src/config.py\n@@ -1,2 +1,4 @@\n def parse_port(value):\n+    if value == \"\":\n+        return 8000\n     return int(value)\n",
+  "git_evidence": {
+    "base_revision": "196c15a2ffb1af284024d066535d92267fc463df",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/config.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 361,
+    "prompt_tokens": 5061,
+    "total_tokens": 5422
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 50,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 2,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_blank_value_uses_default_port (test_config.ParsePortTests.test_blank_value_uses_default_port) ... ok\ntest_valid_port_is_unchanged (test_config.ParsePortTests.test_valid_port_is_unchanged) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/config.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 25,
+        "span_count": 12,
+        "trace_id": "trace_174e0d71a886",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_174e0d71a886"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 2,
+        "binary": false,
+        "deleted_lines": 0,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/config.py"
+        ],
+        "patch": "diff --git a/src/config.py b/src/config.py\nindex a8a7c1d..81712c9 100644\n--- a/src/config.py\n+++ b/src/config.py\n@@ -1,2 +1,4 @@\n def parse_port(value):\n+    if value == \"\":\n+        return 8000\n     return int(value)\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [],
+        "missing_end": [],
+        "tool_calls": 6,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 7291.376,
+        "tool_calls": 6,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 12
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 258.425583015196,
+  "test_exit_code": 0,
+  "test_stderr": "test_blank_value_uses_default_port (test_config.ParsePortTests.test_blank_value_uses_default_port) ... ok\ntest_valid_port_is_unchanged (test_config.ParsePortTests.test_valid_port_is_unchanged) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_174e0d71a886",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 25,
+    "span_count": 12,
+    "trace_id": "trace_174e0d71a886",
+    "valid": true
+  },
+  "trial_id": "parse_port_blank_default_trial_003"
+}

@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "agent_label": "baseline",
+      "agent_version": "v1",
+      "case_id": "smoke_calculator_empty_input",
+      "job_id": "smoke_calculator_empty_input_trial_003",
+      "schedule_index": 1,
+      "trial_index": 3
+    },
+    {
+      "agent_label": "candidate",
+      "agent_version": "v2",
+      "case_id": "smoke_calculator_empty_input",
+      "job_id": "smoke_calculator_empty_input_trial_003",
+      "schedule_index": 2,
+      "trial_index": 3
+    },
+    {
+      "agent_label": "candidate",
+      "agent_version": "v2",
+      "case_id": "smoke_calculator_empty_input",
+      "job_id": "smoke_calculator_empty_input_trial_002",
+      "schedule_index": 3,
+      "trial_index": 2
+    },
+    {
+      "agent_label": "baseline",
+      "agent_version": "v1",
+      "case_id": "smoke_calculator_empty_input",
+      "job_id": "smoke_calculator_empty_input_trial_002",
+      "schedule_index": 4,
+      "trial_index": 2
+    },
+    {
+      "agent_label": "candidate",
+      "agent_version": "v2",
+      "case_id": "smoke_calculator_empty_input",
+      "job_id": "smoke_calculator_empty_input_trial_001",
+      "schedule_index": 5,
+      "trial_index": 1
+    },
+    {
+      "agent_label": "baseline",
+      "agent_version": "v1",
+      "case_id": "smoke_calculator_empty_input",
+      "job_id": "smoke_calculator_empty_input_trial_001",
+      "schedule_index": 6,
+      "trial_index": 1
+    }
+  ],
+  "schema_version": 1,
+  "seed": 20260813
+}

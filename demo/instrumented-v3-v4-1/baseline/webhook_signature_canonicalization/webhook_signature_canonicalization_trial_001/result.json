@@ -1,0 +1,399 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "The fixes are complete. The test output is truncated by the tool at ~200 chars, but the visible tests both pass with `ok` and no failures/errors are reported. By reasoning, the third test also passes: tampered events and wrong secrets produce a different HMAC, which `hmac.compare_digest` correctly rejects.\n\n## Summary\n\n**`src/canonical.py`** — `canonical_bytes` now calls `json.dumps(event, sort_keys=True, separators=(\",\", \":\"))`. `sort_keys=True` recursively sorts dict keys, so logically identical events produce identical canonical bytes regardless of insertion order (e.g. `{\"data\": {\"amount\": 42, \"id\": \"inv-1\"}}` signs the same as `{\"data\": {\"id\": \"inv-1\", \"amount\": 42}}`).\n\n**`src/verify.py`** — `verify_signature` now:\n- Rejects non-string signatures (`None` returns `False`) and length-mismatched signatures.\n- Validates the signature is well-formed hex (`bytes.fromhex`), so `\"not-hex\"` fails closed.\n- Uses `hmac.compare_digest` (constant-time comparison) instead of plain `==`.\n\nThe HMAC-SHA256 protocol is unchanged; only `src/` was modified.",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 13,
+    "denied_tool_attempts": 2,
+    "duplicate_read_rate": 0.0,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.46153846153846156,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 7,
+        "denied": 2,
+        "error": 0,
+        "ok": 5
+      },
+      "edit_file": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "glob": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "read_file": {
+        "calls": 3,
+        "denied": 0,
+        "error": 0,
+        "ok": 3
+      }
+    },
+    "tool_calls": 13,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 0.8461538461538461,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 18
+  },
+  "changed_files": [
+    "src/canonical.py",
+    "src/verify.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 3,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_equivalent_mapping_order_produces_the_same_signature (test_verify.WebhookSignatureTests.test_equivalent_mapping_order_produces_the_same_signature) ... ok\ntest_malformed_signature_is_not_accepted (test_verify.WebhookSignatureTests.test_malformed_signature_is_not_accepted) ... ok\ntest_tampering_or_wrong_secret_fails_closed (test_verify.WebhookSignatureTests.test_tampering_or_wrong_secret_fails_closed) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/canonical.py",
+            "src/verify.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 49,
+          "span_count": 24,
+          "trace_id": "trace_163a6fc76d1a",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_163a6fc76d1a"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 11,
+          "binary": false,
+          "deleted_lines": 5,
+          "evidence_complete": true,
+          "files": 2,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/canonical.py",
+            "src/verify.py"
+          ],
+          "patch": "diff --git a/src/canonical.py b/src/canonical.py\nindex bd4f433..7351a3c 100644\n--- a/src/canonical.py\n+++ b/src/canonical.py\n@@ -4,5 +4,6 @@ import json\n \n \n def canonical_bytes(event):\n-    # BUG: insertion order makes logically identical payloads sign differently.\n-    return json.dumps(event).encode(\"utf-8\")\n+    # Sort keys recursively so logically identical payloads always sign the\n+    # same regardless of dict insertion order.\n+    return json.dumps(event, sort_keys=True, separators=(\",\", \":\")).encode(\"utf-8\")\ndiff --git a/src/verify.py b/src/verify.py\nindex 1366a24..06513da 100644\n--- a/src/verify.py\n+++ b/src/verify.py\n@@ -11,6 +11,11 @@ def signature_for(event, secret):\n \n \n def verify_signature(event, signature, secret):\n-    # BUG: plain equality is not the intended constant-time comparison and\n-    # malformed values are not rejected explicitly.\n-    return signature_for(event, secret) == signature\n+    expected = signature_for(event, secret)\n+    if not isinstance(signature, str) or len(signature) != len(expected):\n+        return False\n+    try:\n+        bytes.fromhex(signature)\n+    except ValueError:\n+        return False\n+    return hmac.compare_digest(expected, signature)\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [
+            "bash",
+            "bash"
+          ],
+          "missing_end": [],
+          "tool_calls": 13,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 30335.194,
+          "tool_calls": 13,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 18
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/canonical.py b/src/canonical.py\nindex bd4f433..7351a3c 100644\n--- a/src/canonical.py\n+++ b/src/canonical.py\n@@ -4,5 +4,6 @@ import json\n \n \n def canonical_bytes(event):\n-    # BUG: insertion order makes logically identical payloads sign differently.\n-    return json.dumps(event).encode(\"utf-8\")\n+    # Sort keys recursively so logically identical payloads always sign the\n+    # same regardless of dict insertion order.\n+    return json.dumps(event, sort_keys=True, separators=(\",\", \":\")).encode(\"utf-8\")\ndiff --git a/src/verify.py b/src/verify.py\nindex 1366a24..06513da 100644\n--- a/src/verify.py\n+++ b/src/verify.py\n@@ -11,6 +11,11 @@ def signature_for(event, secret):\n \n \n def verify_signature(event, signature, secret):\n-    # BUG: plain equality is not the intended constant-time comparison and\n-    # malformed values are not rejected explicitly.\n-    return signature_for(event, secret) == signature\n+    expected = signature_for(event, secret)\n+    if not isinstance(signature, str) or len(signature) != len(expected):\n+        return False\n+    try:\n+        bytes.fromhex(signature)\n+    except ValueError:\n+        return False\n+    return hmac.compare_digest(expected, signature)\n",
+  "git_evidence": {
+    "base_revision": "be15f26cf149bc7c481271c24673739f2e658d12",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/canonical.py\n M src/verify.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 3186,
+    "prompt_tokens": 26169,
+    "total_tokens": 29355
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 30,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_equivalent_mapping_order_produces_the_same_signature (test_verify.WebhookSignatureTests.test_equivalent_mapping_order_produces_the_same_signature) ... ok\ntest_malformed_signature_is_not_accepted (test_verify.WebhookSignatureTests.test_malformed_signature_is_not_accepted) ... ok\ntest_tampering_or_wrong_secret_fails_closed (test_verify.WebhookSignatureTests.test_tampering_or_wrong_secret_fails_closed) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/canonical.py",
+          "src/verify.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 49,
+        "span_count": 24,
+        "trace_id": "trace_163a6fc76d1a",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_163a6fc76d1a"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 11,
+        "binary": false,
+        "deleted_lines": 5,
+        "evidence_complete": true,
+        "files": 2,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/canonical.py",
+          "src/verify.py"
+        ],
+        "patch": "diff --git a/src/canonical.py b/src/canonical.py\nindex bd4f433..7351a3c 100644\n--- a/src/canonical.py\n+++ b/src/canonical.py\n@@ -4,5 +4,6 @@ import json\n \n \n def canonical_bytes(event):\n-    # BUG: insertion order makes logically identical payloads sign differently.\n-    return json.dumps(event).encode(\"utf-8\")\n+    # Sort keys recursively so logically identical payloads always sign the\n+    # same regardless of dict insertion order.\n+    return json.dumps(event, sort_keys=True, separators=(\",\", \":\")).encode(\"utf-8\")\ndiff --git a/src/verify.py b/src/verify.py\nindex 1366a24..06513da 100644\n--- a/src/verify.py\n+++ b/src/verify.py\n@@ -11,6 +11,11 @@ def signature_for(event, secret):\n \n \n def verify_signature(event, signature, secret):\n-    # BUG: plain equality is not the intended constant-time comparison and\n-    # malformed values are not rejected explicitly.\n-    return signature_for(event, secret) == signature\n+    expected = signature_for(event, secret)\n+    if not isinstance(signature, str) or len(signature) != len(expected):\n+        return False\n+    try:\n+        bytes.fromhex(signature)\n+    except ValueError:\n+        return False\n+    return hmac.compare_digest(expected, signature)\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [
+          "bash",
+          "bash"
+        ],
+        "missing_end": [],
+        "tool_calls": 13,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 30335.194,
+        "tool_calls": 13,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 18
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 323.9663330023177,
+  "test_exit_code": 0,
+  "test_stderr": "test_equivalent_mapping_order_produces_the_same_signature (test_verify.WebhookSignatureTests.test_equivalent_mapping_order_produces_the_same_signature) ... ok\ntest_malformed_signature_is_not_accepted (test_verify.WebhookSignatureTests.test_malformed_signature_is_not_accepted) ... ok\ntest_tampering_or_wrong_secret_fails_closed (test_verify.WebhookSignatureTests.test_tampering_or_wrong_secret_fails_closed) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_163a6fc76d1a",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 49,
+    "span_count": 24,
+    "trace_id": "trace_163a6fc76d1a",
+    "valid": true
+  },
+  "trial_id": "webhook_signature_canonicalization_trial_001"
+}
