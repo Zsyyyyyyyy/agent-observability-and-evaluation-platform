@@ -315,6 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="with --resume, create a new Attempt for selected completed jobs; preserve prior evidence",
     )
     parser.add_argument("--dry-run", action="store_true", help="only validate and print expanded jobs")
+    parser.add_argument("--quiet", action="store_true", help="suppress successful JSON output")
     parser.add_argument("--protocol-fingerprint", help="platform-owned Experiment Protocol identity")
     parser.add_argument("--schedule-index", type=int, help="platform-owned interleaved execution position")
     return parser
@@ -403,7 +404,8 @@ def main() -> int:
         return 2
 
     if args.dry_run:
-        print(json.dumps({"manifest": manifest["id"], "jobs": jobs}, ensure_ascii=False, indent=2))
+        if not args.quiet:
+            print(json.dumps({"manifest": manifest["id"], "jobs": jobs}, ensure_ascii=False, indent=2))
         return 0
     if use_docker:
         available, detail = DockerSandbox.available()
@@ -549,7 +551,8 @@ def main() -> int:
     merged_jobs = _merge_job_summaries(summary_path, summaries)
     summary = {"manifest": manifest["id"], "job_count": len(merged_jobs), "jobs": merged_jobs}
     write_json_atomically(summary_path, summary)
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if not args.quiet:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if all(job["status"] == "completed" and job["evaluation_passed"] for job in summaries) else 1
 
 

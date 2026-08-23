@@ -168,10 +168,12 @@ def main() -> int:
     source.add_argument("--verify", help="existing exported Demo directory")
     parser.add_argument("--output", help="new empty destination directory")
     parser.add_argument("--catalog", help="optional Evolution Catalog JSON to include")
+    parser.add_argument("--quiet", action="store_true", help="suppress successful output")
     args = parser.parse_args()
     if args.verify:
         report = verify_demo(args.verify)
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        if not args.quiet or not report["valid"]:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if report["valid"] else 1
     if not args.output:
         parser.error("--output is required with --source")
@@ -180,7 +182,8 @@ def main() -> int:
     except ValueError as exc:
         print(f"Demo export failed: {exc}", file=sys.stderr)
         return 2
-    print(f"Exported {manifest['trial_count']} selected Trials to {Path(args.output).resolve()}")
+    if not args.quiet:
+        print(f"Exported {manifest['trial_count']} selected Trials to {Path(args.output).resolve()}")
     return 0
 
 

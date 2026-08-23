@@ -92,7 +92,7 @@ make offline-demo
 4. `Trace structure → Tree`：按 `parent_span_id` 展开 Span；
 5. `Git diff`：平台独立采集的最终修改证据。
 
-`make verify` 会运行 220 项离线测试、所有 Benchmark Manifest 校验、Python 编译检查、前端语法检查、两个离线 Demo 的文件摘要检查和 Git 差异检查。Docker 可用时再运行：
+`make verify` 会运行 222 项离线测试、所有 Benchmark Manifest 校验、Python 编译检查、前端语法检查、两个离线 Demo 的文件摘要检查和 Git 差异检查。Docker 可用时再运行：
 
 ```bash
 make docker-test

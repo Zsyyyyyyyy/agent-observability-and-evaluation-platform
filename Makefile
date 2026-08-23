@@ -6,6 +6,7 @@ LANGGRAPH_PYTHON ?= .runtime/langgraph-integration-venv/bin/python
 CONSOLE_HOST ?= 127.0.0.1
 CONSOLE_PORT ?= 8765
 DEMO_RUNTIME ?= demo/instrumented-v3-v4-1
+MANIFEST_COUNT := $(words $(wildcard benchmarks/*-case*.yaml))
 
 .DEFAULT_GOAL := help
 .PHONY: help verify test docker-test manifest-check replay-dry-run real-smoke external-real-smoke langgraph-integration external-experiment external-evolution external-statistical-evolution external-v4-preexperiment external-v4-1-preexperiment external-v4-1-benchmark audit-v4-1-benchmark-v2 external-v4-1-benchmark-v2-gate audit-v4-1-benchmark-v2 external-three-arm-benchmark external-three-arm-gates audit-three-arm-benchmark external-v3-negative-control external-v3-negative-gate audit-v3-negative-control-v2 external-v3-negative-gate-v2 audit-v3-negative-control-v2 audit-v3-negative-control-benchmark-v2 external-v3-negative-control-benchmark-v2-gate audit-v3-negative-control-benchmark-v2 apply-external-lineage console studio offline-demo verify-runtime experiment-report gate failure-suite
@@ -39,23 +40,28 @@ help:
 	  '  make verify-runtime RUNTIME=<path>  Verify a complete local Experiment Artifact.'
 
 verify: test manifest-check
-	$(PYTHON) -m compileall -q src scripts adapters tests
-	node --check web/app.js
-	node --check web/studio.js
-	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/export_demo_runtime.py --verify demo/instrumented-v3-v4-1
-	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/export_demo_runtime.py --verify demo/standalone-langgraph-v1-v2
-	git diff --check
+	@$(PYTHON) -m compileall -q src scripts adapters tests
+	@printf '%s\n' '✓ Python compilation valid'
+	@node --check web/app.js
+	@node --check web/studio.js
+	@printf '%s\n' '✓ Frontend syntax valid'
+	@PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/export_demo_runtime.py --verify demo/instrumented-v3-v4-1 --quiet
+	@PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/export_demo_runtime.py --verify demo/standalone-langgraph-v1-v2 --quiet
+	@printf '%s\n' '✓ 2 bundled Demos verified'
+	@git diff --check
+	@printf '%s\n' '✓ Git diff valid'
 
 test:
-	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) -m unittest discover -s tests -q
+	@PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) -m unittest discover -s tests -q
 
 docker-test:
 	RUN_DOCKER_INTEGRATION=1 PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) -m unittest tests.test_sandbox_integration -v
 
 manifest-check:
 	@for manifest in benchmarks/*-case*.yaml; do \
-	  PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/run_benchmark.py --manifest $$manifest --dry-run || exit $$?; \
+	  PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/run_benchmark.py --manifest $$manifest --dry-run --quiet || exit $$?; \
 	done
+	@printf '%s\n' '✓ $(MANIFEST_COUNT) Benchmark Manifests valid'
 
 replay-dry-run:
 	PYTHONPATH=$(PYTHONPATH_VALUE) $(PYTHON) scripts/run_benchmark.py \

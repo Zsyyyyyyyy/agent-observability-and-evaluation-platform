@@ -14,6 +14,22 @@ REGRESSION = Path(__file__).resolve().parents[1]
 
 
 class RunnerSafetyTests(unittest.TestCase):
+    def test_quiet_dry_run_keeps_success_output_empty(self):
+        completed = subprocess.run(
+            [
+                sys.executable, "scripts/run_benchmark.py",
+                "--manifest", "benchmarks/smoke-case-design.yaml",
+                "--dry-run", "--quiet",
+            ],
+            cwd=REGRESSION,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "")
+
     def test_parent_timeout_result_is_storeable_and_fails_trace_closed(self):
         with TemporaryDirectory() as directory:
             result = _timed_out_result({"job_id": "case_trial_001"}, 30)
