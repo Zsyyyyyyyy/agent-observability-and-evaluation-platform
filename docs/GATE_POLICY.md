@@ -2,6 +2,8 @@
 
 Gate 只读取已有 `experiment.json`，不会执行 Agent 或读取模型密钥。默认策略见 `configs/default-gate.json`。
 
+所有 Rate 必须是 `[0, 1]` 内的有限数，成本、耗时和计数必须是有限非负数；`NaN`、Infinity、负 Token 等不可能指标会被视为损坏的 Gate 输入并拒绝计算，不能借由比较运算绕过规则。
+
 ## 硬条件
 
 - 完成率、评测通过率不得低于 Baseline。

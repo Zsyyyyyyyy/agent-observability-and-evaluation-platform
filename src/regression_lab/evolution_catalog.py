@@ -194,10 +194,16 @@ class EvolutionCatalog:
         rows.append(payload)
 
     def index_experiment(self, report: dict[str, Any], *, artifact_root: str | Path,
-                         manifests: Iterable[dict[str, Any]] = ()) -> str:
+                         manifests: Iterable[dict[str, Any]] = (), project_id: str | None = None) -> str:
         """Index an experiment report and its selected Attempt evidence idempotently."""
 
         document = self.load()
+        if project_id is not None:
+            existing_project = document.get("project")
+            if existing_project is None:
+                document["project"] = {"project_id": project_id}
+            elif not isinstance(existing_project, dict) or existing_project.get("project_id") != project_id:
+                raise ValueError("Evolution Catalog project_id does not match this Experiment")
         root = Path(artifact_root).resolve()
         protocol_path = root / "protocol.json"
         try:
@@ -217,13 +223,32 @@ class EvolutionCatalog:
         case_ids = sorted({str(job.get("case_id")) for summary in (report.get("summaries") or {}).values() if isinstance(summary, dict)
                            for job in summary.get("jobs", []) if isinstance(job, dict) and isinstance(job.get("case_id"), str)})
         experiment_id = _identifier("exp", {"artifact_root": str(root), "agents": agents, "cases": case_ids})
+        def stable_agent_id(agent: dict[str, Any]) -> str:
+            protocol_agent = protocol_agents.get(str(agent.get("id")), {})
+            snapshot = protocol_agent.get("agent_spec_snapshot") if isinstance(protocol_agent, dict) else None
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("agent_id"), str):
+                return snapshot["agent_id"]
+            return _agent_id(str(agent.get("version", "")))
+
+        observed_agent_ids = {stable_agent_id(agent) for agent in agents[:2] if isinstance(agent, dict)}
+        lineage_agent_id = observed_agent_ids.pop() if len(observed_agent_ids) == 1 else None
         context = {
+            "project_id": project_id,
             "case_ids": case_ids,
             "agents": [{"id": item.get("id"), "version": item.get("version")} for item in agents],
             "metrics_version": report.get("metrics_version"),
             "trial_count_required_per_case": report.get("trial_count_required_per_case"),
             "protocol_fingerprint": (report.get("protocol") or {}).get("fingerprint") if isinstance(report.get("protocol"), dict) else None,
             "protocol_comparability": (report.get("protocol") or {}).get("comparability") if isinstance(report.get("protocol"), dict) else None,
+            # 保留既有比较上下文，同时写入 Console 用的稳定身份，避免前端从版本名猜测作用域。
+            "identity": {
+                "schema_version": 1,
+                "project_id": project_id,
+                "agent_id": lineage_agent_id,
+                "experiment_id": experiment_id,
+                "baseline_version": agents[0].get("version"),
+                "candidate_version": agents[1].get("version"),
+            },
         }
         existing_experiment = next((row for row in document["experiments"] if row.get("experiment_id") == experiment_id), {})
         created_at = str(existing_experiment.get("created_at") or _now())
@@ -259,19 +284,18 @@ class EvolutionCatalog:
                     sample_result = decoded if isinstance(decoded, dict) else {}
                 except (OSError, json.JSONDecodeError):
                     pass
-            # The stable family label is derived only to group old, unversioned
-            # artifacts. Lineage/status/change semantics are never inferred.
-            agent_id = _agent_id(version)
+            protocol_agent = protocol_agents.get(label, {})
+            # 新 AgentSpec 的稳定身份优先于版本字符串推断；后者只用于历史 Artifact。
+            agent_id = stable_agent_id(agent)
             existing_agent = next((row for row in document["agents"] if row.get("agent_id") == agent_id), {})
             existing_adapter = (existing_agent.get("metadata") or {}).get("adapter_id") if isinstance(existing_agent, dict) else None
             adapter_id = str(sample.get("adapter_id") or sample_result.get("adapter_id") or existing_adapter or "custom")
-            version_id = _identifier("ver", {"agent": agent_id, "version": version})
+            version_id = _identifier("ver", {"project": project_id, "agent": agent_id, "version": version})
             version_by_agent_label[label] = version_id
             self._upsert(document, "agents", "agent_id", {
                 "agent_id": agent_id, "display_name": agent_id.replace("-", " ").title(), "kind": _kind(adapter_id),
                 "created_at": created_at, "metadata": {"adapter_id": adapter_id},
             })
-            protocol_agent = protocol_agents.get(label, {})
             profile = protocol_agent.get("prompt_profile") if isinstance(protocol_agent.get("prompt_profile"), str) else sample.get("agent_profile") or sample_result.get("agent_profile") or "unrecorded"
             observed_version = {
                 "version_id": version_id, "agent_id": agent_id, "version": version, "parent_version_id": None,
@@ -284,6 +308,8 @@ class EvolutionCatalog:
                              "config_hash": _hash({"budget": sample.get("budget") or sample_result.get("budget"), "adapter": adapter_id,
                                                    "protocol_fingerprint": protocol_artifact.get("protocol_fingerprint")})},
             }
+            if project_id is not None:
+                observed_version["project_id"] = project_id
             existing_version = next((row for row in document["versions"] if row.get("version_id") == version_id), None)
             # Explicit lineage is human-authored governance metadata. Future
             # Artifact indexing may refresh evidence, but must not erase it.
@@ -298,7 +324,7 @@ class EvolutionCatalog:
                     observed_version["snapshot"].update(overrides)
             self._upsert(document, "versions", "version_id", observed_version)
 
-        self._upsert(document, "experiments", "experiment_id", {
+        observed_experiment = {
             "experiment_id": experiment_id, "name": " vs ".join(str(item.get("version")) for item in agents[:2]),
             "baseline_version_id": version_by_agent_label[str(agents[0]["id"])], "candidate_version_id": version_by_agent_label[str(agents[1]["id"])],
             "status": "completed", "created_at": created_at, "completed_at": str(existing_experiment.get("completed_at") or _now()), "case_ids": case_ids,
@@ -307,7 +333,10 @@ class EvolutionCatalog:
             "artifact_root": str(root), "report_path": str(root / "experiment.json"),
             "comparison_basis": comparison_basis, "comparison_basis_hash": evaluation_context_hash(comparison_basis),
             "comparison_summary": _comparison_summary(report),
-        })
+        }
+        if project_id is not None:
+            observed_experiment["project_id"] = project_id
+        self._upsert(document, "experiments", "experiment_id", observed_experiment)
 
         for agent in agents[:2]:
             label = str(agent["id"])
@@ -398,7 +427,7 @@ class EvolutionCatalog:
                 "attempts": [row for row in document["attempts"] if row["trial_id"] in trial_ids],
                 "gate_decisions": [row for row in document["gate_decisions"] if row["experiment_id"] in experiment_ids]}
 
-    def timeline(self, experiment_id: str | None = None) -> dict[str, Any]:
+    def timeline(self, experiment_id: str | None = None, *, agent_id: str | None = None) -> dict[str, Any]:
         """Return a lineage-scoped experiment ledger with comparison safety labels."""
 
         document = self.load()
@@ -406,13 +435,21 @@ class EvolutionCatalog:
         current = next((row for row in experiments if row.get("experiment_id") == experiment_id), None)
         if experiment_id is not None and current is None:
             return {"versions": [], "experiments": [], "gate_decisions": [], "current_experiment_id": None}
-        if current is not None:
+        if current is not None and agent_id is None:
             current_version_ids = {current["baseline_version_id"], current["candidate_version_id"]}
             lineage_agent_ids = {
                 row["agent_id"] for row in document["versions"] if row.get("version_id") in current_version_ids
             }
             lineage_version_ids = {
                 row["version_id"] for row in document["versions"] if row.get("agent_id") in lineage_agent_ids
+            }
+            experiments = [
+                row for row in experiments
+                if row.get("baseline_version_id") in lineage_version_ids or row.get("candidate_version_id") in lineage_version_ids
+            ]
+        elif agent_id is not None:
+            lineage_version_ids = {
+                row["version_id"] for row in document["versions"] if row.get("agent_id") == agent_id
             }
             experiments = [
                 row for row in experiments
@@ -433,6 +470,9 @@ class EvolutionCatalog:
         }
         experiment_ids = {row["experiment_id"] for row in experiments}
         return {
+            "agents": [row for row in document["agents"] if row.get("agent_id") in {
+                version.get("agent_id") for version in document["versions"] if version.get("version_id") in version_ids
+            }],
             "versions": _lineage_order([row for row in document["versions"] if row.get("version_id") in version_ids]),
             "experiments": decorated,
             "gate_decisions": [row for row in document["gate_decisions"] if row.get("experiment_id") in experiment_ids],

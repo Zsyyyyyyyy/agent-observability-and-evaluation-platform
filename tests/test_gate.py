@@ -1,4 +1,5 @@
 import unittest
+import math
 
 from regression_lab.gate import evaluate_gate
 from scripts.evaluate_gate import select_comparison_arm
@@ -162,6 +163,19 @@ class GateTests(unittest.TestCase):
         report = evaluate_gate(experiment(failed, failed), {})
         self.assertEqual(report["decision"]["status"], "hold")
         self.assertIn("candidate_infra_failed_rate_limit", report["decision"]["hard_blocking_failures"])
+
+    def test_gate_rejects_non_finite_or_impossible_persisted_metrics(self):
+        with self.assertRaisesRegex(ValueError, "finite rate between 0 and 1"):
+            evaluate_gate(experiment(METRICS, {**METRICS, "completion_rate": math.nan}), {})
+        with self.assertRaisesRegex(ValueError, "finite non-negative number"):
+            evaluate_gate(experiment(METRICS, {**METRICS, "avg_model_tokens": -1.0}), {})
+
+    def test_absolute_candidate_failure_is_classified_as_reliability_regression(self):
+        candidate = {**METRICS, "infra_failed_rate": 0.1}
+
+        report = evaluate_gate(experiment(candidate, candidate), {})
+
+        self.assertTrue(report["decision"]["correctness_or_reliability_regressed"])
 
     def test_gate_is_inconclusive_for_missing_metric_instead_of_defaulting_to_zero(self):
         candidate = dict(METRICS)

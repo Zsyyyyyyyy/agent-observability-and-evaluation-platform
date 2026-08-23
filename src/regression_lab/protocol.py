@@ -14,6 +14,7 @@ import os
 import platform
 import random
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -53,6 +54,76 @@ def tree_hash(path: str | Path) -> str:
         digest.update(item.read_bytes())
         digest.update(b"\0")
     return "sha256:" + digest.hexdigest()
+
+
+def _module_entrypoint(interpreter: str, module: str) -> Path | None:
+    """定位 ``python -m`` 的本地模块文件，而不执行 Agent 本身。"""
+
+    lookup = (
+        "import importlib.util, sys; "
+        "spec = importlib.util.find_spec(sys.argv[1]); "
+        "print(spec.origin if spec and spec.origin else '')"
+    )
+    try:
+        result = subprocess.run(
+            [interpreter, "-c", lookup, module],
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    location = result.stdout.strip()
+    candidate = Path(location)
+    return candidate.resolve() if location and candidate.is_file() else None
+
+
+def agent_source_snapshot(command: Iterable[str]) -> dict[str, str | None]:
+    """Identify the executable Agent source without persisting its local path."""
+
+    arguments = list(command)
+    if len(arguments) >= 3 and arguments[1] == "-m":
+        entrypoint = _module_entrypoint(arguments[0], arguments[2])
+    else:
+        entrypoint = next((Path(value).resolve() for value in reversed(arguments) if Path(value).is_file()), None)
+    if entrypoint is None:
+        return {"agent_source_hash": None, "entrypoint_hash": None, "source_scope": "unavailable", "source_revision": None}
+    entrypoint_hash = file_hash(entrypoint)
+    try:
+        root_result = subprocess.run(
+            ["git", "-C", str(entrypoint.parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
+        root = Path(root_result.stdout.strip())
+        files_result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
+        files = sorted({line for line in files_result.stdout.splitlines() if line})
+        digest = hashlib.sha256()
+        for relative in files:
+            source = root / relative
+            if not source.is_file():
+                continue
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(source.read_bytes())
+            digest.update(b"\0")
+        revision = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True, timeout=3,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return {
+            "agent_source_hash": entrypoint_hash,
+            "entrypoint_hash": entrypoint_hash,
+            "source_scope": "entrypoint_only",
+            "source_revision": None,
+        }
+    return {
+        "agent_source_hash": "sha256:" + digest.hexdigest(),
+        "entrypoint_hash": entrypoint_hash,
+        "source_scope": "git_worktree",
+        "source_revision": revision,
+    }
 
 
 def _redact(value: Any) -> Any:
@@ -98,11 +169,13 @@ def _manifest_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
 def _source_hashes(adapter: str, external_command: list[str] | None) -> dict[str, str]:
     root = Path(__file__).resolve().parents[2]
     sources = [root / "src" / "regression_lab" / "evaluators.py", root / "src" / "regression_lab" / "schema.py"]
+    hashes = {source.name: file_hash(source) for source in sources if source.is_file()}
+    hashes["regression_lab_tree"] = tree_hash(root / "src" / "regression_lab")
     if adapter == "external-command" and external_command:
-        candidate = Path(external_command[-1])
-        if candidate.is_file():
-            sources.append(candidate)
-    return {source.name: file_hash(source) for source in sources if source.is_file()}
+        identity = agent_source_snapshot(external_command)
+        if isinstance(identity["agent_source_hash"], str):
+            hashes["external_agent"] = identity["agent_source_hash"]
+    return hashes
 
 
 def _optional_float(name: str, default: float, *, maximum: float) -> float:
@@ -147,19 +220,20 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
 
     snapshots = [_manifest_snapshot(manifest) for manifest in manifests]
     source_hashes = _source_hashes(adapter, external_command)
-    profile_source_hash = source_hashes.get(Path(external_command[-1]).name) if external_command else None
+    profile_source_hash = agent_source_snapshot(external_command)["agent_source_hash"] if external_command else None
     prompt_profiles = prompt_profiles or {}
     agent_snapshots = agent_snapshots or {}
     protocol_agents = []
     for item in agents:
         descriptor = prompt_profiles.get(item["version"], {})
         snapshot = agent_snapshots.get(item["id"])
+        source_hash = snapshot.get("agent_source_hash") if isinstance(snapshot, dict) else None
         entrypoint_hash = snapshot.get("entrypoint_hash") if isinstance(snapshot, dict) else None
         protocol_agents.append({
             "label": item["id"], "version": item["version"], "adapter": adapter,
-            "agent_source_hash": entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
+            "agent_source_hash": source_hash if isinstance(source_hash, str) else entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
             "prompt_profile": descriptor.get("profile_id", item["version"]),
-            "prompt_profile_source_hash": entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
+            "prompt_profile_source_hash": source_hash if isinstance(source_hash, str) else entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
             # The Agent protocol-description handshake hashes the final system
             # prompts rendered for every Case, without persisting their text.
             "rendered_prompt_set_hash": descriptor.get("rendered_prompt_set_hash", "unavailable"),

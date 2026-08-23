@@ -35,17 +35,27 @@ def handler_for(repository: DashboardRepository, static_root: Path):
             super().end_headers()
 
         def do_GET(self) -> None:
-            path = urlparse(self.path).path
-            if path == "/api/dashboard": return self._json(repository.dashboard())
-            if path == "/api/trials": return self._json(repository.trials())
-            if path == "/api/experiments/latest": return self._json(repository.latest_experiment() or {})
-            if path == "/api/gate/latest": return self._json(repository.latest_gate() or {})
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == "/api/dashboard": return self._json(repository.runtime_response(repository.dashboard))
+            if path == "/api/trials": return self._json(repository.runtime_response(repository.trials))
+            if path == "/api/experiments/latest": return self._json(repository.runtime_response(lambda: repository.latest_experiment() or {}))
+            if path == "/api/gate/latest": return self._json(repository.runtime_response(lambda: repository.latest_gate() or {}))
             if path == "/api/protocol": return self._json(repository.protocol())
+            if path == "/api/context": return self._json(repository.validate_runtime_context())
             if path == "/api/evolution": return self._json(repository.evolution())
             if path == "/api/policy-stop": return self._json(repository.policy_stop_evidence())
             if path.startswith("/api/trials/"):
+                validation = repository.validate_runtime_context()
+                if not validation["available"]:
+                    return self._json({
+                        "available": False, "reason": validation["reason"], "data": {}, "context": validation["context"],
+                        **({"runtime": validation["runtime"]} if "runtime" in validation else {}),
+                    })
                 detail = repository.trial(unquote(path.removeprefix("/api/trials/")))
-                return self._json(detail or {"error": "trial not found"}, HTTPStatus.OK if detail else HTTPStatus.NOT_FOUND)
+                if detail is None:
+                    return self._json({"error": "trial not found"}, HTTPStatus.NOT_FOUND)
+                return self._json(repository.runtime_response(lambda: detail))
             if path == "/": self.path = "/index.html"
             return super().do_GET()
 

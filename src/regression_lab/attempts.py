@@ -1,15 +1,15 @@
-"""Attempt-scoped Artifact lifecycle for resumable benchmark Trials.
+"""管理可恢复 Trial 下按 Attempt 隔离的产物生命周期。
 
-A Trial is the logical Case × Agent Version × repetition unit.  An Attempt is
-one physical execution of that Trial.  Attempt directories never share a
-worktree, trace, or agent-output path, so a late process from one execution
-cannot corrupt a retry.
+Trial 表示 Case × Agent 版本 × 重复次数这一逻辑运行单元，Attempt 表示它的
+一次物理执行。不同 Attempt 不共享工作目录、Trace 或 Agent 输出路径，避免上一次
+执行的延迟进程污染重试证据。
 """
 
 from __future__ import annotations
 
-import json
 import fcntl
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,9 +28,19 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def terminal_status_from_result(result: dict[str, Any]) -> str:
+    """把 Worker 结果状态映射为物理 Attempt 的终态。"""
+
+    if result.get("status") == "timed_out":
+        return "timed_out"
+    if result.get("status") == "trace_incomplete":
+        return "invalid"
+    return "completed"
+
+
 @dataclass(frozen=True)
 class AttemptPaths:
-    """Paths exclusively owned by a single physical Trial execution."""
+    """一次物理 Trial 执行独占的产物路径。"""
 
     attempt_id: str
     directory: Path
@@ -61,7 +71,7 @@ class AttemptPaths:
 
 
 class AttemptManager:
-    """Create and inspect immutable Attempt directories under one owned Job."""
+    """在一个平台所有的 Job 下创建和读取不可变 Attempt。"""
 
     def __init__(self, job_dir: str | Path, *, job_id: str, fingerprint: str,
                  protocol_fingerprint: str | None = None, schedule_index: int | None = None):
@@ -85,7 +95,7 @@ class AttemptManager:
         return self.job_dir / ".trial.lock"
 
     def acquire_trial_lock(self) -> None:
-        """Acquire an exclusive non-blocking lock for this logical Trial."""
+        """为逻辑 Trial 获取非阻塞排他锁。"""
 
         if self._lock_fd is not None:
             return
@@ -108,7 +118,7 @@ class AttemptManager:
             self._lock_fd = None
 
     def recover_orphaned_attempts(self) -> list[str]:
-        """Mark stale running Attempts aborted after this process owns the Trial lock."""
+        """持有 Trial 锁后，恢复或终止遗留的 running Attempt。"""
 
         if self._lock_fd is None:
             raise RuntimeError("trial lock is required before recovering attempts")
@@ -120,8 +130,17 @@ class AttemptManager:
                 continue
             if payload.get("status") != "running":
                 continue
-            payload.update({"status": "aborted", "ended_at": _now(), "error": "recovered orphaned running attempt"})
-            write_json_atomically(paths.manifest, payload)
+            try:
+                result = self._read_result(paths)
+            except ValueError:
+                payload.update({"status": "aborted", "ended_at": _now(), "error": "recovered orphaned running attempt"})
+                write_json_atomically(paths.manifest, payload)
+            else:
+                self.finish_attempt(
+                    paths,
+                    terminal_status_from_result(result),
+                    error=result.get("error") if isinstance(result.get("error"), str) else None,
+                )
             recovered.append(paths.attempt_id)
         return recovered
 
@@ -141,7 +160,7 @@ class AttemptManager:
         return sorted(paths, key=lambda path: int(path.attempt_id[8:]))
 
     def create_attempt(self) -> AttemptPaths:
-        """Allocate the next Attempt without modifying prior evidence."""
+        """分配下一个 Attempt，不修改此前证据。"""
 
         self.attempts_dir.mkdir(parents=True, exist_ok=True)
         next_index = max((int(path.attempt_id[8:]) for path in self.list_attempts()), default=0) + 1
@@ -150,13 +169,13 @@ class AttemptManager:
         directory.mkdir()
         paths = AttemptPaths(attempt_id, directory)
         payload: dict[str, Any] = {
-                    "schema_version": ATTEMPT_SCHEMA_VERSION,
-                    "attempt_id": attempt_id,
-                    "job_id": self.job_id,
-                    "fingerprint": self.fingerprint,
-                    "status": "running",
-                    "started_at": _now(),
-                }
+            "schema_version": ATTEMPT_SCHEMA_VERSION,
+            "attempt_id": attempt_id,
+            "job_id": self.job_id,
+            "fingerprint": self.fingerprint,
+            "status": "running",
+            "started_at": _now(),
+        }
         if self.protocol_fingerprint:
             payload["protocol_fingerprint"] = self.protocol_fingerprint
         if self.schedule_index is not None:
@@ -165,23 +184,22 @@ class AttemptManager:
         return paths
 
     def finish_attempt(self, paths: AttemptPaths, status: str, *, error: str | None = None) -> None:
-        """Mark an owned Attempt terminal while retaining every Artifact."""
+        """最终结果持久化后，才把所属 Attempt 标记为终态。"""
 
         if status not in ATTEMPT_STATUSES - {"running"}:
             raise ValueError(f"unsupported terminal attempt status: {status}")
         payload = self._load_owned_manifest(paths)
-        payload.update({"status": status, "ended_at": _now()})
+        result_digest = self._result_digest(paths)
+        payload.update({"status": status, "ended_at": _now(), "result_sha256": result_digest})
         if error:
             payload["error"] = error
         write_json_atomically(paths.manifest, payload)
 
     def select_attempt(self, paths: AttemptPaths, *, reason: str = "latest_terminal_attempt") -> None:
-        """Record the sole Trial projection chosen from immutable evidence.
+        """记录从不可变证据中选出的唯一 Trial 投影。
 
-        The selector deliberately chooses the newest terminal Attempt, rather
-        than the historical best pass.  A later retry must not disappear from
-        the active Trial view; reliability analysis can still inspect every
-        retained Attempt separately.
+        选择器固定采用最新终态 Attempt，而不是历史最优结果。后续重试不能从当前
+        Trial 视图中消失；可靠性分析仍可独立读取所有保留的 Attempt。
         """
 
         payload = self._load_owned_manifest(paths)
@@ -189,21 +207,21 @@ class AttemptManager:
             raise ValueError("cannot select a running attempt")
         write_json_atomically(
             self.selected_path,
-                {
-                    "schema_version": ATTEMPT_SCHEMA_VERSION,
-                    "job_id": self.job_id,
-                    "attempt_id": paths.attempt_id,
-                    "selection_policy": "latest_terminal_attempt_v1",
-                    "selection_reason": reason,
-                    "attempt_count": len(self.list_attempts()),
-                    "selected_at": _now(),
-                    **({"protocol_fingerprint": self.protocol_fingerprint} if self.protocol_fingerprint else {}),
-                    **({"schedule_index": self.schedule_index} if self.schedule_index is not None else {}),
-                },
+            {
+                "schema_version": ATTEMPT_SCHEMA_VERSION,
+                "job_id": self.job_id,
+                "attempt_id": paths.attempt_id,
+                "selection_policy": "latest_terminal_attempt_v1",
+                "selection_reason": reason,
+                "attempt_count": len(self.list_attempts()),
+                "selected_at": _now(),
+                **({"protocol_fingerprint": self.protocol_fingerprint} if self.protocol_fingerprint else {}),
+                **({"schedule_index": self.schedule_index} if self.schedule_index is not None else {}),
+            },
         )
 
     def resolve_selected_attempt(self) -> tuple[AttemptPaths, dict[str, Any]] | None:
-        """Resolve the current projection without recalculating selection."""
+        """读取当前投影，不重新执行选择策略。"""
 
         try:
             selected = json.loads(self.selected_path.read_text(encoding="utf-8"))
@@ -217,25 +235,25 @@ class AttemptManager:
                 continue
             try:
                 manifest = self._load_owned_manifest(paths)
-                result = json.loads(paths.result.read_text(encoding="utf-8"))
+                result = self._read_result(paths)
             except (OSError, json.JSONDecodeError, ValueError):
                 return None
-            if manifest.get("status") == "running" or not isinstance(result, dict):
+            if manifest.get("status") == "running" or not self._result_matches_manifest(paths, manifest):
                 return None
             return paths, result
         return None
 
     def select_latest_terminal_attempt(self) -> tuple[AttemptPaths, dict[str, Any]] | None:
-        """Select the newest readable terminal Attempt from immutable evidence."""
+        """从不可变证据中选择最新且可读的终态 Attempt。"""
 
         candidates: list[tuple[int, AttemptPaths, dict[str, Any]]] = []
         for paths in self.list_attempts():
             try:
                 manifest = self._load_owned_manifest(paths)
-                result = json.loads(paths.result.read_text(encoding="utf-8"))
+                result = self._read_result(paths)
             except (OSError, json.JSONDecodeError, ValueError):
                 continue
-            if manifest.get("status") == "running" or not isinstance(result, dict):
+            if manifest.get("status") == "running" or not self._result_matches_manifest(paths, manifest):
                 continue
             candidates.append((int(paths.attempt_id[8:]), paths, result))
         if not candidates:
@@ -244,8 +262,7 @@ class AttemptManager:
         self.select_attempt(paths)
         return paths, result
 
-    # Compatibility for callers created before the selection policy was
-    # explicit.  New code should call select_latest_terminal_attempt.
+    # 保留旧调用入口；新代码应直接使用语义明确的 select_latest_terminal_attempt。
     def select_best_attempt(self) -> tuple[AttemptPaths, dict[str, Any]] | None:
         return self.select_latest_terminal_attempt()
 
@@ -259,3 +276,22 @@ class AttemptManager:
         if payload.get("fingerprint") != self.fingerprint or payload.get("attempt_id") != paths.attempt_id:
             raise ValueError("attempt manifest identity does not match")
         return payload
+
+    @staticmethod
+    def _read_result(paths: AttemptPaths) -> dict[str, Any]:
+        try:
+            result = json.loads(paths.result.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"attempt result is unreadable: {paths.result}") from exc
+        if not isinstance(result, dict):
+            raise ValueError(f"attempt result is not an object: {paths.result}")
+        return result
+
+    @staticmethod
+    def _result_digest(paths: AttemptPaths) -> str:
+        AttemptManager._read_result(paths)
+        return "sha256:" + hashlib.sha256(paths.result.read_bytes()).hexdigest()
+
+    def _result_matches_manifest(self, paths: AttemptPaths, manifest: dict[str, Any]) -> bool:
+        expected = manifest.get("result_sha256")
+        return not isinstance(expected, str) or expected == self._result_digest(paths)

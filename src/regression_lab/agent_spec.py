@@ -1,4 +1,4 @@
-"""Static AgentSpec v1 parsing for the external-command onboarding flow."""
+"""AgentSpec v1 静态解析：用于 external-command 接入流程。"""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 
 from regression_lab.adapters import AdapterCapabilities
 from regression_lab.manifest import ManifestError, load_mapping_document, validate_identifier
+from regression_lab.protocol import agent_source_snapshot
 
 
 AGENT_SPEC_SCHEMA_VERSION = 1
@@ -28,14 +29,15 @@ _SDK_CAPABILITY_FIELDS = frozenset({
 
 
 class AgentSpecError(ValueError):
-    """Raised when an AgentSpec cannot be safely translated to a Trial input."""
+    """AgentSpec 无法安全转换为 Trial 输入时抛出。"""
 
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """User-owned identity, launch command, and optional observability claim."""
+    """用户侧 Agent 的身份标识、启动命令及可选的观测能力声明。"""
 
     path: Path
+    project_id: str | None
     agent_id: str
     version: str
     command: tuple[str, ...]
@@ -43,16 +45,19 @@ class AgentSpec:
     capabilities: AdapterCapabilities
 
     def resolve_command(self, *, workspace: str, task: str) -> list[str]:
-        """Resolve the only two Trial-owned values accepted by AgentSpec v1."""
+        """将 command 中的 {workspace} / {task} 模板替换为实际值。
+
+        AgentSpec v1 只允许这两个由 Trial 拥有的运行时字段出现在模板中。
+        """
 
         values = {"workspace": workspace, "task": task}
         return [argument.format(**values) for argument in self.command]
 
     def as_external_command_config(self, *, workspace: str | None = None, task: str | None = None) -> dict[str, object]:
-        """Return the normalized values needed by the existing external-command Adapter.
+        """返回 external-command Adapter 所需的标准化配置。
 
-        Commands containing templates are resolved by the external-command
-        Worker after it owns the Trial Worktree and task prompt.
+        若未传入 workspace/task，则保留原始模板命令，由 Worker 在拿到
+        Trial Worktree 和任务提示词后再做替换。
         """
 
         if (workspace is None) != (task is None):
@@ -67,42 +72,37 @@ class AgentSpec:
         }
 
     def snapshot(self) -> dict[str, object]:
-        """Return the portable, content-addressed identity used by an Experiment.
+        """返回 Experiment 使用的、可移植的内容寻址身份快照。
 
-        This deliberately hashes only the entry point when one is directly
-        addressable.  An argv does not reliably identify the whole external
-        repository, so the scope must stay explicit in the Artifact.
+        只对可直接定位的入口文件做哈希：argv 无法可靠标识整个外部仓库，
+        因此源码范围必须在 Artifact 中显式声明，不能隐式推断。
         """
 
+        source = agent_source_snapshot(self.command)
         normalized = {
             "schema_version": AGENT_SPEC_SCHEMA_VERSION,
+            "project_id": self.project_id,
             "agent_id": self.agent_id,
             "version": self.version,
             "command": list(self.command),
             "observation_mode": self.observation_mode,
             "capabilities": self.capabilities.as_dict(),
         }
-        entrypoint = next((Path(value) for value in reversed(self.command) if Path(value).is_file()), None)
-        if entrypoint is not None:
-            entrypoint_hash = "sha256:" + hashlib.sha256(entrypoint.read_bytes()).hexdigest()
-            source_scope = "entrypoint_only"
-        else:
-            entrypoint_hash = None
-            source_scope = "unavailable"
         canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return {
+            "project_id": self.project_id,
             "agent_id": self.agent_id,
             "version": self.version,
             "observation_mode": self.observation_mode,
             "normalized_command": list(self.command),
             "capabilities": self.capabilities.as_dict(),
             "agent_spec_hash": "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-            "entrypoint_hash": entrypoint_hash,
-            "source_scope": source_scope,
+            **source,
         }
 
 
 def _unknown_fields(value: dict[str, Any], *, allowed: set[str], path: str) -> list[str]:
+    """校验字典中是否存在未授权字段，区分平台保留字段和完全不支持的字段。"""
     errors = []
     for key in value:
         if key in allowed:
@@ -115,6 +115,7 @@ def _unknown_fields(value: dict[str, Any], *, allowed: set[str], path: str) -> l
 
 
 def _template_errors(argument: str, index: int) -> list[str]:
+    """校验单个命令参数中的模板占位符：括号必须配对，且字段名必须在白名单内。"""
     errors = []
     cursor = 0
     while cursor < len(argument):
@@ -136,11 +137,15 @@ def _template_errors(argument: str, index: int) -> list[str]:
 
 
 def _normalize_capabilities(mode: str, observation: dict[str, Any], errors: list[str]) -> AdapterCapabilities | None:
+    """根据观测模式归一化能力声明。
+
+    blackbox 模式下用户不能声明能力，trace 由平台侧 Worker 统一提供；
+    sdk 模式下用户可逐项声明，默认全部关闭，需显式开启。
+    """
     raw = observation.get("capabilities")
     if mode == "blackbox":
         if raw is not None:
             errors.append("observation.capabilities is only valid when observation.mode is sdk")
-        # Stage 2 will let the Worker provide this platform lifecycle Trace.
         return AdapterCapabilities(
             trace=True, hierarchical_trace=False, model_usage=False, tool_trace=False,
             tool_semantics=False, test_trace=False, context_trace=False,
@@ -173,6 +178,7 @@ def _normalize_capabilities(mode: str, observation: dict[str, Any], errors: list
 
 
 def _command_errors(command: Any, spec_path: Path) -> tuple[tuple[str, ...] | None, list[str]]:
+    """校验并归一化启动命令：必须是非空 argv 列表，可执行文件需在 PATH 中或为绝对路径。"""
     if not isinstance(command, list) or not command:
         return None, ["runtime.command must be a non-empty argv list, not a shell command string"]
     errors = []
@@ -205,14 +211,14 @@ def _command_errors(command: Any, spec_path: Path) -> tuple[tuple[str, ...] | No
 
 
 def load_agent_spec(path: str | Path) -> AgentSpec:
-    """Parse and validate AgentSpec v1 without starting the user Agent."""
+    """解析并校验 AgentSpec v1 文件，不启动用户 Agent。"""
 
     spec_path = Path(path).resolve()
     try:
         raw = load_mapping_document(spec_path, document_name="agent spec")
     except (OSError, ManifestError) as exc:
         raise AgentSpecError(str(exc)) from exc
-    errors = _unknown_fields(raw, allowed={"schema_version", "agent", "runtime", "observation"}, path="agent")
+    errors = _unknown_fields(raw, allowed={"schema_version", "project_id", "agent", "runtime", "observation"}, path="agent")
     if raw.get("schema_version") != AGENT_SPEC_SCHEMA_VERSION:
         errors.append(f"schema_version must be {AGENT_SPEC_SCHEMA_VERSION}")
     agent = raw.get("agent")
@@ -240,6 +246,15 @@ def load_agent_spec(path: str | Path) -> AgentSpec:
     except ManifestError as exc:
         errors.append(str(exc))
         version = ""
+    project_value = raw.get("project_id")
+    if project_value is None:
+        project_id = None
+    else:
+        try:
+            project_id = validate_identifier(project_value, "project_id")
+        except ManifestError as exc:
+            errors.append(str(exc))
+            project_id = None
     command, command_errors = _command_errors(runtime.get("command"), spec_path)
     errors.extend(command_errors)
     mode = observation.get("mode")
@@ -249,8 +264,9 @@ def load_agent_spec(path: str | Path) -> AgentSpec:
     capabilities = _normalize_capabilities(mode, observation, errors) if mode else None
     if errors:
         raise AgentSpecError("\n".join(f"- {error}" for error in errors))
+    # 走到这里说明所有校验通过，command 和 capabilities 必然非 None
     assert command is not None and capabilities is not None
     return AgentSpec(
-        path=spec_path, agent_id=agent_id, version=version, command=command,
+        path=spec_path, project_id=project_id, agent_id=agent_id, version=version, command=command,
         observation_mode=mode, capabilities=capabilities,
     )

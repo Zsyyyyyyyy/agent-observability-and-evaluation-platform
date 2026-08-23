@@ -22,6 +22,7 @@ class AttemptManagerTests(unittest.TestCase):
             manager = AttemptManager(Path(directory) / "trial_001", job_id="trial_001", fingerprint="sha256:test")
             first = manager.create_attempt()
             first.trace.write_text("first evidence\n", encoding="utf-8")
+            first.result.write_text(json.dumps({"status": "trace_incomplete"}), encoding="utf-8")
             manager.finish_attempt(first, "invalid", error="trace validation failed")
             second = manager.create_attempt()
 
@@ -41,6 +42,7 @@ class AttemptManagerTests(unittest.TestCase):
             attempt = manager.create_attempt()
             with self.assertRaisesRegex(ValueError, "running"):
                 manager.select_attempt(attempt)
+            attempt.result.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
             manager.finish_attempt(attempt, "completed")
             manager.select_attempt(attempt)
 
@@ -55,6 +57,7 @@ class AttemptManagerTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             manager = AttemptManager(Path(directory) / "trial_001", job_id="trial_001", fingerprint="sha256:test")
             attempt = manager.create_attempt()
+            attempt.result.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unsupported"):
                 manager.finish_attempt(attempt, "running")
 
@@ -62,11 +65,11 @@ class AttemptManagerTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             manager = AttemptManager(Path(directory) / "trial_001", job_id="trial_001", fingerprint="sha256:test")
             passed = manager.create_attempt()
-            manager.finish_attempt(passed, "completed")
             passed.result.write_text(json.dumps({"status": "completed", "evaluation": {"passed": True}, "trace_validation": {"valid": True}}), encoding="utf-8")
+            manager.finish_attempt(passed, "completed")
             failed = manager.create_attempt()
-            manager.finish_attempt(failed, "completed", error="provider unavailable")
             failed.result.write_text(json.dumps({"status": "model_failed", "evaluation": {"passed": False}, "trace_validation": {"valid": True}}), encoding="utf-8")
+            manager.finish_attempt(failed, "completed", error="provider unavailable")
 
             selected, result = manager.select_latest_terminal_attempt() or (None, None)
             self.assertEqual(selected, failed)
@@ -80,12 +83,12 @@ class AttemptManagerTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             manager = AttemptManager(Path(directory) / "trial_001", job_id="trial_001", fingerprint="sha256:test")
             first = manager.create_attempt()
-            manager.finish_attempt(first, "completed")
             first.result.write_text(json.dumps({"status": "completed", "evaluation": {"passed": True}}), encoding="utf-8")
+            manager.finish_attempt(first, "completed")
             manager.select_attempt(first, reason="operator_approved_retry_policy")
             second = manager.create_attempt()
-            manager.finish_attempt(second, "completed")
             second.result.write_text(json.dumps({"status": "model_failed", "evaluation": {"passed": False}}), encoding="utf-8")
+            manager.finish_attempt(second, "completed")
 
             selected, result = manager.resolve_selected_attempt() or (None, None)
             self.assertEqual(selected, first)
@@ -117,6 +120,30 @@ class AttemptManagerTests(unittest.TestCase):
             manifest = json.loads(attempt.manifest.read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "aborted")
             self.assertEqual(attempt.trace.read_text(encoding="utf-8"), "partial trace\n")
+
+    def test_recovery_finalizes_a_durable_result_before_selection(self):
+        with TemporaryDirectory() as directory:
+            manager = AttemptManager(Path(directory) / "trial_001", job_id="trial_001", fingerprint="sha256:test")
+            manager.acquire_trial_lock()
+            attempt = manager.create_attempt()
+            attempt.result.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            recovered = manager.recover_orphaned_attempts()
+            manager.release_trial_lock()
+
+            self.assertEqual(recovered, ["attempt_001"])
+            manifest = json.loads(attempt.manifest.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "completed")
+            self.assertTrue(manifest["result_sha256"].startswith("sha256:"))
+
+    def test_tampered_terminal_result_cannot_be_selected(self):
+        with TemporaryDirectory() as directory:
+            manager = AttemptManager(Path(directory) / "trial_001", job_id="trial_001", fingerprint="sha256:test")
+            attempt = manager.create_attempt()
+            attempt.result.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            manager.finish_attempt(attempt, "completed")
+            attempt.result.write_text(json.dumps({"status": "agent_failed"}), encoding="utf-8")
+
+            self.assertIsNone(manager.select_latest_terminal_attempt())
 
     def test_atomic_json_publish_never_exposes_partial_document(self):
         with TemporaryDirectory() as directory:

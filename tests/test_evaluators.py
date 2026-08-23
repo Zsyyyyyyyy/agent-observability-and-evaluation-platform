@@ -62,6 +62,23 @@ class EvaluatorTests(unittest.TestCase):
         self.assertFalse(score.passed)
         self.assertEqual(score.actual["run"], 0)
 
+    def test_manifest_selected_evaluators_and_acceptance_are_applied(self):
+        result = {
+            "status": "completed", "test_exit_code": 0,
+            "test_stdout": "Ran 1 test in 0.01s\nOK", "test_stderr": "",
+            "changed_files": ["src/a.py"], "allowed_paths": ["src/**"], "forbidden_paths": ["tests/**"],
+        }
+
+        evaluation = evaluate_baseline(
+            result, required=["test", "path_policy"],
+            acceptance=["test_exit_code == 0", "forbidden_path_changes == 0", "result_status == completed"],
+        )
+
+        self.assertTrue(evaluation["passed"])
+        self.assertEqual(evaluation["required_evaluators"], ["test", "path_policy"])
+        self.assertEqual(len(evaluation["scores"]), 6)
+        self.assertTrue(evaluation["acceptance"]["passed"])
+
     def test_diff_budget_and_tool_integrity_fail_with_specific_evidence(self):
         with TemporaryDirectory() as directory:
             trace_path = Path(directory) / "trace.jsonl"
@@ -92,6 +109,27 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual(integrity.actual["unauthorized"], ["connect_mcp"])
         self.assertFalse(budget.passed)
         self.assertEqual(budget.actual["tool_calls"], 1)
+
+    def test_malformed_trace_attributes_do_not_crash_evaluation(self):
+        with TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "trace.jsonl"
+            trace_path.write_text(
+                '\n'.join([
+                    '{"kind":"span_start","span_id":"tool","name":"tool.call","attributes":["invalid"]}',
+                    '{"kind":"span_end","span_id":"tool","status":"ok","attributes":"invalid"}',
+                ]),
+                encoding="utf-8",
+            )
+            result = {
+                "trace_path": str(trace_path),
+                "trace_validation": {"valid": False, "errors": ["malformed attributes"]},
+                "allowed_tools": ["read_file"],
+            }
+
+            evaluation = evaluate_baseline(result)
+
+        self.assertFalse(evaluation["passed"])
+        self.assertEqual(len(evaluation["scores"]), 6)
 
 
 if __name__ == "__main__":

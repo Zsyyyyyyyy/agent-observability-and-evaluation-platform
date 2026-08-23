@@ -18,6 +18,18 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(len(jobs), 2)
         self.assertEqual(jobs[0]["allowed_paths"], ["src/**"])
         self.assertEqual(jobs[0]["budget"]["max_tool_calls"], 24)
+        self.assertEqual(jobs[0]["required_evaluators"], ["test", "path_policy", "diff", "tool_integrity", "budget", "trace_completeness"])
+
+    def test_manifest_rejects_unknown_evaluator_and_acceptance_expression(self):
+        manifest = load_manifest(REGRESSION / "benchmarks" / "smoke-case-design.yaml")
+        manifest["evaluators"]["required"] = ["llm_judge"]
+        manifest["acceptance"]["must"] = ["score > 0.8"]
+
+        validation = validate_manifest(manifest, REGRESSION)
+
+        self.assertFalse(validation.valid)
+        self.assertIn("evaluators.required must be a non-empty unique list of supported evaluators", validation.errors)
+        self.assertIn("acceptance.must must be a non-empty unique list of supported acceptance checks", validation.errors)
 
     def test_invalid_manifest_reports_nested_fields(self):
         validation = validate_manifest({"schema_version": 1}, REGRESSION)

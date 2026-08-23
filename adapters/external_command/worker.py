@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shlex
@@ -18,6 +17,30 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+# 外部 Agent 默认只继承运行和模型访问所需的显式变量，避免平台进程中的其他密钥
+# 随 os.environ 全量泄漏。需要特殊环境的 Agent 应由自己的入口加载专用配置。
+INHERITED_AGENT_ENV = frozenset({
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "AGENT_API_KEY",
+    "AGENT_MODEL",
+    "AGENT_BASE_URL",
+    "AGENT_PROVIDER",
+    "AGENT_TEMPERATURE",
+    "AGENT_TOP_P",
+    "AGENT_SEED",
+    "AGENT_REQUEST_TIMEOUT_SECONDS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+})
+
 from regression_lab.evaluators import evaluate_baseline
 from regression_lab.behavior import summarize_trial_behavior
 from regression_lab.attribution import attribute_trial
@@ -26,7 +49,23 @@ from regression_lab.sandbox import DockerSandbox, SandboxConfig, SandboxUnavaila
 from regression_lab.schema import validate_trace
 from regression_lab.store import RunStore
 from regression_lab.artifacts import write_json_atomically
+from regression_lab.protocol import agent_source_snapshot
 from regression_lab.trace import TraceCollector
+
+
+def _external_environment() -> dict[str, str]:
+    """构造传给外部 Agent 和宿主机测试命令的最小环境。"""
+
+    environment = {
+        name: os.environ[name]
+        for name in INHERITED_AGENT_ENV
+        if name in os.environ
+    }
+    environment.update({
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(ROOT / "src"),
+    })
+    return environment
 
 
 def _git(worktree: Path, *args: str) -> str:
@@ -88,10 +127,9 @@ MODEL_FAILURE_KINDS = frozenset({
 
 
 def _command_source_hash(command: list[str]) -> str | None:
-    """Measure the trusted local entry point before it is executed."""
+    """Measure the trusted Agent worktree before it is executed."""
 
-    candidate = next((Path(argument) for argument in reversed(command) if Path(argument).is_file()), None)
-    return "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate else None
+    return agent_source_snapshot(command)["agent_source_hash"]
 
 
 def _read_output(path: Path) -> tuple[str, str, str | None]:
@@ -227,7 +265,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         )
         sandbox_spec = spec.get("sandbox")
         sandbox = DockerSandbox(worktree, SandboxConfig(**{key: value for key, value in sandbox_spec.items() if key in SandboxConfig.__dataclass_fields__})) if sandbox_spec else None
-        environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT / "src"), os.environ.get("PYTHONPATH", "")])),
+        environment = {**_external_environment(),
             "REGRESSION_TRIAL_ID": trial_id, "REGRESSION_TRACE_ID": trace_id, "REGRESSION_TRACE_PATH": str(trace_path),
             "REGRESSION_AGENT_OUTPUT_PATH": str(agent_output), "REGRESSION_WORKTREE": str(worktree), "REGRESSION_CASE_ID": str(spec.get("case_id", "")),
             "REGRESSION_AGENT_VERSION": str(spec.get("agent_version", "")), "REGRESSION_ADAPTER_ID": "external-command"}
@@ -314,7 +352,9 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         result["behavior"] = summarize_trial_behavior(result)
         if result["status"] == "completed" and not result["trace_validation"]["valid"]:
             result.update({"status": "trace_incomplete", "error": "trace validation failed"})
-        result["evaluation"] = evaluate_baseline(result)
+        result["evaluation"] = evaluate_baseline(
+            result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),
+        )
         result["scores"] = result["evaluation"]["scores"]
         result["failure_attribution"] = attribute_trial(result)
         if result.get("run_store"):

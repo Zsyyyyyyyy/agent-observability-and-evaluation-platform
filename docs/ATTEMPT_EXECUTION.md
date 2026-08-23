@@ -38,7 +38,9 @@
 - `aborted` 预留给后续的进程崩溃恢复检测。
 
 每个 Attempt 的 manifest 记录 Job fingerprint、开始/结束时间、终态和可选错误，
-用于确认 Artifact 的归属。
+用于确认 Artifact 的归属；终态还记录不可变 `result.json` 的 SHA-256。发布或演示前可运行
+`regression-lab experiment verify --runtime <runtime>`，核对 Protocol、执行计划、选中
+Attempt、Result 投影、Trace、Agent 源码身份与 Gate 证据关联。
 
 ## Resume 规则
 

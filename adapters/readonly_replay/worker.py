@@ -524,7 +524,9 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         if result["status"] == "completed" and not validation.valid:
             result["status"] = "trace_incomplete"
         result["trace_summary"] = trace.summary()
-        result["evaluation"] = evaluate_baseline(result)
+        result["evaluation"] = evaluate_baseline(
+            result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),
+        )
         result["scores"] = result["evaluation"]["scores"]
         run_store = spec.get("run_store")
         if run_store:

@@ -54,7 +54,8 @@ def _usage_and_model_calls(result: dict[str, Any]) -> tuple[int, dict[str, int],
             if starts[span_id]:
                 model_calls += 1
         elif event.get("kind") == "span_end" and isinstance(span_id, str) and starts.get(span_id):
-            usage = (event.get("attributes") or {}).get("usage")
+            attributes = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
+            usage = attributes.get("usage")
             if not isinstance(usage, dict):
                 continue
             for key in totals:
@@ -96,7 +97,8 @@ def _semantic_patterns(result: dict[str, Any], tool_behavior: dict[str, Any]) ->
     for event in events:
         span_id = event.get("span_id")
         if event.get("kind") == "span_start":
-            is_terminal = event.get("name") == "agent.finalize" or (event.get("attributes") or {}).get("terminal") is True
+            attributes = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
+            is_terminal = event.get("name") == "agent.finalize" or attributes.get("terminal") is True
             if is_terminal and isinstance(span_id, str):
                 terminal_spans.add(span_id)
             span_type = span_type_for(event)

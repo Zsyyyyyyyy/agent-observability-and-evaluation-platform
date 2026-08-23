@@ -1,7 +1,8 @@
-"""Deterministic release gate for Agent experiment comparison reports."""
+"""基于 Agent 实验比较报告执行确定性的发布 Gate。"""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,25 +27,65 @@ class GateRule:
 
 def _number(policy: dict[str, Any], key: str, default: float) -> float:
     value = policy.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"policy.{key} must be numeric")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        raise ValueError(f"policy.{key} must be a finite number")
     return float(value)
 
 
 def _optional_delta(before: Any, after: Any) -> float | None:
-    """Return a numeric candidate-baseline delta when both values exist."""
+    """两个值都可用时，返回 candidate - baseline 的差值。"""
 
-    if isinstance(before, (int, float)) and not isinstance(before, bool) and isinstance(after, (int, float)) and not isinstance(after, bool):
+    if (
+        isinstance(before, (int, float))
+        and not isinstance(before, bool)
+        and isinstance(after, (int, float))
+        and not isinstance(after, bool)
+    ):
         return float(after) - float(before)
     return None
 
 
 def _metric(value: Any) -> float | None:
-    """Return a finite Gate metric, never treating absent evidence as zero."""
+    """返回有限的 Gate 指标，不把缺失证据当作零。"""
 
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
         return float(value)
     return None
+
+
+def _validate_arm_metrics(label: str, metrics: dict[str, Any]) -> None:
+    """拒绝不可能的持久化指标，避免基于损坏证据作出决策。"""
+
+    rate_fields = (
+        "completion_rate", "evaluation_pass_rate", "test_pass_rate",
+        "model_failed_rate", "trace_incomplete_rate", "infra_failed_rate",
+        "path_policy_violation_rate", "diff_policy_violation_rate",
+    )
+    non_negative_fields = (
+        "trial_count", "avg_duration_ms", "avg_tool_calls", "avg_model_tokens",
+        "avg_added_lines", "avg_deleted_lines", "p50_duration_ms", "p95_duration_ms",
+        "p50_model_tokens", "p95_model_tokens",
+    )
+    for field in rate_fields:
+        if field not in metrics:
+            continue
+        value = _metric(metrics[field])
+        if value is None or not 0.0 <= value <= 1.0:
+            raise ValueError(f"experiment.comparison.{label}.{field} must be a finite rate between 0 and 1")
+    for field in non_negative_fields:
+        if field not in metrics or metrics[field] is None:
+            continue
+        value = _metric(metrics[field])
+        if value is None or value < 0:
+            raise ValueError(f"experiment.comparison.{label}.{field} must be a finite non-negative number")
 
 
 def _unavailable_rule(name: str, expected: str, message: str) -> GateRule:
@@ -54,7 +95,7 @@ def _unavailable_rule(name: str, expected: str, message: str) -> GateRule:
 def _cost_increase_rule(*, name: str, baseline: float, candidate: float,
                         ratio_policy_key: str, absolute_zero_baseline_policy_key: str,
                         policy: dict[str, Any], label: str) -> GateRule:
-    """Compare cost safely when a zero baseline makes a ratio undefined."""
+    """当基线为零、比例无定义时，改用绝对增量安全比较成本。"""
 
     if baseline == 0:
         increase = candidate
@@ -106,7 +147,7 @@ def _relative_upper_rule(*, name: str, baseline: Any, candidate: Any, policy: di
 
 
 def _coverage_rules(experiment: dict[str, Any], policy: dict[str, Any]) -> list[GateRule]:
-    """Require complete paired Case/Trial evidence before a release decision."""
+    """发布决策前要求 Case/Trial 成对证据完整。"""
 
     comparison = experiment.get("comparison") or {}
     case_comparisons = comparison.get("case_comparisons")
@@ -148,7 +189,7 @@ def _coverage_rules(experiment: dict[str, Any], policy: dict[str, Any]) -> list[
 
 
 def _efficiency_diagnostics(comparison: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
-    """Describe tail/efficiency movement without making it a hard Gate rule."""
+    """描述尾延迟和效率变化，但不把它们作为硬性 Gate 规则。"""
 
     baseline = comparison.get("baseline") or {}
     candidate = comparison.get("candidate") or {}
@@ -166,6 +207,15 @@ def _efficiency_diagnostics(comparison: dict[str, Any], policy: dict[str, Any]) 
         if delta is None:
             return "not_available"
         return "regressed" if delta > threshold else "within_policy"
+
+    if average_token_delta is None:
+        token_status = "not_available"
+    elif average_token_delta < 0:
+        token_status = "saved"
+    elif average_token_delta > 0:
+        token_status = "increased"
+    else:
+        token_status = "unchanged"
 
     return {
         "blocking": False,
@@ -185,27 +235,140 @@ def _efficiency_diagnostics(comparison: dict[str, Any], policy: dict[str, Any]) 
         "model_tokens": {
             "average_delta": average_token_delta,
             "p95_delta": p95_token_delta,
-            "status": "saved" if average_token_delta is not None and average_token_delta < 0 else "increased" if average_token_delta is not None and average_token_delta > 0 else "unchanged" if average_token_delta is not None else "not_available",
+            "status": token_status,
         },
     }
 
 
-def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
-    """Evaluate candidate promotion without re-running Agents.
+def _quality_rules(
+    baseline: dict[str, Any], candidate: dict[str, Any], policy: dict[str, Any]
+) -> list[GateRule]:
+    """生成正确性与故障率的绝对门槛和非回归规则。"""
 
-    Reliability and correctness are hard fail-closed checks. Efficiency metrics
-    are bounded regressions: a policy can tolerate small cost movement while
-    blocking material regressions.
+    rules: list[GateRule] = []
+    absolute_minimums = (
+        ("completion_rate", "candidate_completion_rate_minimum", "min_candidate_completion_rate", "completion rate"),
+        (
+            "evaluation_pass_rate",
+            "candidate_evaluation_pass_rate_minimum",
+            "min_candidate_evaluation_pass_rate",
+            "evaluation pass rate",
+        ),
+    )
+    absolute_maximums = (
+        ("model_failed_rate", "candidate_model_failed_rate_limit", "max_candidate_model_failed_rate", "model failed rate"),
+        (
+            "trace_incomplete_rate", "candidate_trace_incomplete_rate_limit",
+            "max_candidate_trace_incomplete_rate", "trace incomplete rate",
+        ),
+        (
+            "infra_failed_rate", "candidate_infra_failed_rate_limit",
+            "max_candidate_infra_failed_rate", "infrastructure failed rate",
+        ),
+        (
+            "path_policy_violation_rate", "candidate_path_policy_violation_rate_limit",
+            "max_candidate_path_policy_violation_rate", "path policy violation rate",
+        ),
+        (
+            "diff_policy_violation_rate", "candidate_diff_policy_violation_rate_limit",
+            "max_candidate_diff_policy_violation_rate", "diff policy violation rate",
+        ),
+    )
+    non_regression_minimums = (
+        ("completion_rate", "completion_rate_non_regression", "min_completion_rate_delta", "completion rate"),
+        (
+            "evaluation_pass_rate", "evaluation_pass_rate_non_regression",
+            "min_evaluation_pass_rate_delta", "evaluation pass rate",
+        ),
+    )
+    non_regression_maximums = (
+        ("model_failed_rate", "model_failed_rate_non_regression", "max_model_failed_rate_delta", "model failed rate"),
+        (
+            "trace_incomplete_rate", "trace_incomplete_rate_non_regression",
+            "max_trace_incomplete_rate_delta", "trace incomplete rate",
+        ),
+        (
+            "infra_failed_rate", "infra_failed_rate_non_regression",
+            "max_infra_failed_rate_delta", "infrastructure failed rate",
+        ),
+        (
+            "path_policy_violation_rate", "path_policy_violation_rate_non_regression",
+            "max_path_policy_violation_rate_delta", "path policy violation rate",
+        ),
+        (
+            "diff_policy_violation_rate", "diff_policy_violation_rate_non_regression",
+            "max_diff_policy_violation_rate_delta", "diff policy violation rate",
+        ),
+    )
+    for metric, name, policy_key, label in absolute_minimums:
+        rules.append(_absolute_lower_rule(
+            name=name, value=candidate.get(metric), policy=policy,
+            key=policy_key, default=1.0, label=label,
+        ))
+    for metric, name, policy_key, label in absolute_maximums:
+        rules.append(_absolute_upper_rule(
+            name=name, value=candidate.get(metric), policy=policy,
+            key=policy_key, default=0.0, label=label,
+        ))
+    for metric, name, policy_key, label in non_regression_minimums:
+        rules.append(_relative_lower_rule(
+            name=name, baseline=baseline.get(metric), candidate=candidate.get(metric),
+            policy=policy, key=policy_key, default=0.0, label=label,
+        ))
+    for metric, name, policy_key, label in non_regression_maximums:
+        rules.append(_relative_upper_rule(
+            name=name, baseline=baseline.get(metric), candidate=candidate.get(metric),
+            policy=policy, key=policy_key, default=0.0, label=label,
+        ))
+    return rules
+
+
+def _cost_rule(
+    baseline: dict[str, Any], candidate: dict[str, Any], policy: dict[str, Any],
+    *, metric: str, name: str, ratio_key: str, zero_baseline_key: str, label: str,
+) -> GateRule:
+    """为一项平均成本生成规则；任一比较臂缺失时明确标记不可用。"""
+
+    baseline_value = _metric(baseline.get(metric))
+    candidate_value = _metric(candidate.get(metric))
+    if baseline_value is None or candidate_value is None:
+        return _unavailable_rule(
+            name, "available cost measurements",
+            f"baseline or candidate {label} average is not available",
+        )
+    return _cost_increase_rule(
+        name=name, baseline=baseline_value, candidate=candidate_value,
+        ratio_policy_key=ratio_key,
+        absolute_zero_baseline_policy_key=zero_baseline_key,
+        policy=policy, label=label,
+    )
+
+
+def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+    """不重新运行 Agent，直接评估候选版本是否可以晋级。
+
+    可靠性和正确性采用失败关闭的硬性检查；效率指标允许策略容忍小幅成本变化，
+    但会阻断显著回归。
     """
 
     comparison = experiment.get("comparison")
-    if not isinstance(comparison, dict) or not isinstance(comparison.get("baseline"), dict) or not isinstance(comparison.get("candidate"), dict):
+    if (
+        not isinstance(comparison, dict)
+        or not isinstance(comparison.get("baseline"), dict)
+        or not isinstance(comparison.get("candidate"), dict)
+    ):
         raise ValueError("experiment.comparison with baseline and candidate metrics is required")
     baseline, candidate = comparison["baseline"], comparison["candidate"]
+    _validate_arm_metrics("baseline", baseline)
+    _validate_arm_metrics("candidate", candidate)
     reliability = comparison.get("reliability") or {}
     rules: list[GateRule] = []
     protocol = experiment.get("protocol") if isinstance(experiment.get("protocol"), dict) else None
-    protocol_comparability = protocol.get("comparability") if isinstance(protocol, dict) and isinstance(protocol.get("comparability"), dict) else None
+    protocol_comparability = (
+        protocol.get("comparability")
+        if isinstance(protocol, dict) and isinstance(protocol.get("comparability"), dict)
+        else None
+    )
     level = protocol_comparability.get("level") if isinstance(protocol_comparability, dict) else None
     rules.append(GateRule(
         "protocol_strict_comparability", 1.0 if level == "strict" else 0.0, "== 1.0", level == "strict",
@@ -213,78 +376,64 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
     ))
     rules.extend(_coverage_rules(experiment, policy))
 
-    rules.extend([
-        _absolute_lower_rule(name="candidate_completion_rate_minimum", value=candidate.get("completion_rate"),
-                             policy=policy, key="min_candidate_completion_rate", default=1.0, label="completion rate"),
-        _absolute_lower_rule(name="candidate_evaluation_pass_rate_minimum", value=candidate.get("evaluation_pass_rate"),
-                             policy=policy, key="min_candidate_evaluation_pass_rate", default=1.0, label="evaluation pass rate"),
-        _absolute_upper_rule(name="candidate_model_failed_rate_limit", value=candidate.get("model_failed_rate"),
-                             policy=policy, key="max_candidate_model_failed_rate", default=0.0, label="model failed rate"),
-        _absolute_upper_rule(name="candidate_trace_incomplete_rate_limit", value=candidate.get("trace_incomplete_rate"),
-                             policy=policy, key="max_candidate_trace_incomplete_rate", default=0.0, label="trace incomplete rate"),
-        _absolute_upper_rule(name="candidate_infra_failed_rate_limit", value=candidate.get("infra_failed_rate"),
-                             policy=policy, key="max_candidate_infra_failed_rate", default=0.0, label="infrastructure failed rate"),
-        _absolute_upper_rule(name="candidate_path_policy_violation_rate_limit", value=candidate.get("path_policy_violation_rate"),
-                             policy=policy, key="max_candidate_path_policy_violation_rate", default=0.0, label="path policy violation rate"),
-        _absolute_upper_rule(name="candidate_diff_policy_violation_rate_limit", value=candidate.get("diff_policy_violation_rate"),
-                             policy=policy, key="max_candidate_diff_policy_violation_rate", default=0.0, label="diff policy violation rate"),
-        _relative_lower_rule(name="completion_rate_non_regression", baseline=baseline.get("completion_rate"), candidate=candidate.get("completion_rate"),
-                             policy=policy, key="min_completion_rate_delta", default=0.0, label="completion rate"),
-        _relative_lower_rule(name="evaluation_pass_rate_non_regression", baseline=baseline.get("evaluation_pass_rate"), candidate=candidate.get("evaluation_pass_rate"),
-                             policy=policy, key="min_evaluation_pass_rate_delta", default=0.0, label="evaluation pass rate"),
-        _relative_upper_rule(name="model_failed_rate_non_regression", baseline=baseline.get("model_failed_rate"), candidate=candidate.get("model_failed_rate"),
-                             policy=policy, key="max_model_failed_rate_delta", default=0.0, label="model failed rate"),
-        _relative_upper_rule(name="trace_incomplete_rate_non_regression", baseline=baseline.get("trace_incomplete_rate"), candidate=candidate.get("trace_incomplete_rate"),
-                             policy=policy, key="max_trace_incomplete_rate_delta", default=0.0, label="trace incomplete rate"),
-        _relative_upper_rule(name="infra_failed_rate_non_regression", baseline=baseline.get("infra_failed_rate"), candidate=candidate.get("infra_failed_rate"),
-                             policy=policy, key="max_infra_failed_rate_delta", default=0.0, label="infrastructure failed rate"),
-        _relative_upper_rule(name="path_policy_violation_rate_non_regression", baseline=baseline.get("path_policy_violation_rate"), candidate=candidate.get("path_policy_violation_rate"),
-                             policy=policy, key="max_path_policy_violation_rate_delta", default=0.0, label="path policy violation rate"),
-        _relative_upper_rule(name="diff_policy_violation_rate_non_regression", baseline=baseline.get("diff_policy_violation_rate"), candidate=candidate.get("diff_policy_violation_rate"),
-                             policy=policy, key="max_diff_policy_violation_rate_delta", default=0.0, label="diff policy violation rate"),
-    ])
-    baseline_tools, candidate_tools = _metric(baseline.get("avg_tool_calls")), _metric(candidate.get("avg_tool_calls"))
-    if baseline_tools is None or candidate_tools is None:
-        rules.append(_unavailable_rule("average_tool_calls_limit", "available cost measurements", "baseline or candidate tool-call average is not available"))
-    else:
-        rules.append(_cost_increase_rule(
-            name="average_tool_calls_limit", baseline=baseline_tools, candidate=candidate_tools,
-            ratio_policy_key="max_avg_tool_calls_ratio",
-            absolute_zero_baseline_policy_key="max_avg_tool_calls_absolute_increase_when_baseline_zero",
-            policy=policy, label="tool-call",
-        ))
+    rules.extend(_quality_rules(baseline, candidate, policy))
+    rules.append(_cost_rule(
+        baseline, candidate, policy,
+        metric="avg_tool_calls", name="average_tool_calls_limit",
+        ratio_key="max_avg_tool_calls_ratio",
+        zero_baseline_key="max_avg_tool_calls_absolute_increase_when_baseline_zero",
+        label="tool-call",
+    ))
+    rules.append(_cost_rule(
+        baseline, candidate, policy,
+        metric="avg_model_tokens", name="average_model_tokens_limit",
+        ratio_key="max_avg_model_tokens_ratio",
+        zero_baseline_key="max_avg_model_tokens_absolute_increase_when_baseline_zero",
+        label="token",
+    ))
 
-    baseline_tokens, candidate_tokens = _metric(baseline.get("avg_model_tokens")), _metric(candidate.get("avg_model_tokens"))
-    if baseline_tokens is None or candidate_tokens is None:
-        rules.append(_unavailable_rule("average_model_tokens_limit", "available cost measurements", "baseline or candidate token average is not available"))
-    else:
-        rules.append(_cost_increase_rule(
-            name="average_model_tokens_limit", baseline=baseline_tokens, candidate=candidate_tokens,
-            ratio_policy_key="max_avg_model_tokens_ratio",
-            absolute_zero_baseline_policy_key="max_avg_model_tokens_absolute_increase_when_baseline_zero",
-            policy=policy, label="token",
-        ))
-
-    raw_baseline = (reliability.get("baseline") or {})
-    raw_candidate = (reliability.get("candidate") or {})
-    baseline_consistency = raw_baseline.get("all_pass_at_k", raw_baseline.get("pass_at_k"))
-    candidate_consistency = raw_candidate.get("all_pass_at_k", raw_candidate.get("pass_at_k"))
-    rules.append(_relative_lower_rule(name="all_pass_at_3_non_regression", baseline=baseline_consistency, candidate=candidate_consistency,
-                                      policy=policy, key="min_all_pass_at_k_delta", default=0.0, label="all-pass@k consistency"))
-    rules.append(_relative_upper_rule(name="flaky_case_rate_non_regression", baseline=raw_baseline.get("flaky_case_rate"), candidate=raw_candidate.get("flaky_case_rate"),
-                                      policy=policy, key="max_flaky_case_rate_delta", default=0.0, label="flaky case rate"))
+    baseline_reliability = reliability.get("baseline") or {}
+    candidate_reliability = reliability.get("candidate") or {}
+    baseline_consistency = baseline_reliability.get("all_pass_at_k", baseline_reliability.get("pass_at_k"))
+    candidate_consistency = candidate_reliability.get("all_pass_at_k", candidate_reliability.get("pass_at_k"))
+    rules.append(_relative_lower_rule(
+        name="all_pass_at_3_non_regression",
+        baseline=baseline_consistency,
+        candidate=candidate_consistency,
+        policy=policy,
+        key="min_all_pass_at_k_delta",
+        default=0.0,
+        label="all-pass@k consistency",
+    ))
+    rules.append(_relative_upper_rule(
+        name="flaky_case_rate_non_regression",
+        baseline=baseline_reliability.get("flaky_case_rate"),
+        candidate=candidate_reliability.get("flaky_case_rate"),
+        policy=policy,
+        key="max_flaky_case_rate_delta",
+        default=0.0,
+        label="flaky case rate",
+    ))
 
     hard_failures = [rule.name for rule in rules if not rule.passed]
     correctness_reliability_rules = {
+        "candidate_completion_rate_minimum", "candidate_evaluation_pass_rate_minimum",
+        "candidate_model_failed_rate_limit", "candidate_trace_incomplete_rate_limit",
+        "candidate_infra_failed_rate_limit", "candidate_path_policy_violation_rate_limit",
+        "candidate_diff_policy_violation_rate_limit",
         "completion_rate_non_regression", "evaluation_pass_rate_non_regression",
-        "model_failed_rate_non_regression", "trace_incomplete_rate_limit",
-        "infra_failed_rate_limit", "path_policy_violation_rate_limit",
-        "diff_policy_violation_rate_limit", "all_pass_at_3_non_regression",
+        "model_failed_rate_non_regression", "trace_incomplete_rate_non_regression",
+        "infra_failed_rate_non_regression", "path_policy_violation_rate_non_regression",
+        "diff_policy_violation_rate_non_regression", "all_pass_at_3_non_regression",
         "flaky_case_rate_non_regression",
     }
     correctness_or_reliability_regressed = bool(correctness_reliability_rules.intersection(hard_failures))
     average_token_delta = _optional_delta(baseline.get("avg_model_tokens"), candidate.get("avg_model_tokens"))
-    token_saving_cannot_offset = correctness_or_reliability_regressed and average_token_delta is not None and average_token_delta < 0
+    token_saving_cannot_offset = (
+        correctness_or_reliability_regressed
+        and average_token_delta is not None
+        and average_token_delta < 0
+    )
     decision_message = (
         "blocked: correctness or reliability regression is not offset by token savings"
         if token_saving_cannot_offset else

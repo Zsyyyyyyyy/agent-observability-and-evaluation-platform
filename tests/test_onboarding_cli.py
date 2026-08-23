@@ -126,6 +126,7 @@ class OnboardingCliTests(unittest.TestCase):
             def write_spec(path: Path, version: str) -> None:
                 path.write_text(json.dumps({
                     "schema_version": 1,
+                    "project_id": "blackbox-ab-fixture",
                     "agent": {"id": "blackbox-ab", "version": version},
                     "runtime": {"command": [sys.executable, str(ROOT / "examples" / "external_blackbox_agent.py"), "--workspace", "{workspace}", "--task", "{task}"]},
                     "observation": {"mode": "blackbox"},
@@ -147,8 +148,25 @@ class OnboardingCliTests(unittest.TestCase):
         snapshots = {item["label"]: item["agent_spec_snapshot"] for item in protocol["agents"]}
         self.assertEqual(set(snapshots), {"baseline", "candidate"})
         self.assertNotEqual(snapshots["baseline"]["agent_spec_hash"], snapshots["candidate"]["agent_spec_hash"])
-        self.assertTrue(all(item["source_scope"] == "entrypoint_only" for item in snapshots.values()))
+        self.assertTrue(all(item["source_scope"] in {"entrypoint_only", "git_worktree"} for item in snapshots.values()))
+        self.assertEqual({item["project_id"] for item in snapshots.values()}, {"blackbox-ab-fixture"})
+        self.assertIn(ROOT / ".runtime/projects/blackbox-ab-fixture", runtime.parents)
         report = json.loads((runtime / "experiment.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["project_id"], "blackbox-ab-fixture")
+        self.assertEqual(report["evaluation_context"]["project_id"], "blackbox-ab-fixture")
+        self.assertEqual(report["evaluation_context"]["agent_id"], "blackbox-ab")
+        self.assertEqual(report["evaluation_context"]["baseline_version"], "v1")
+        self.assertEqual(report["evaluation_context"]["candidate_version"], "v2")
+        self.assertFalse(report["evaluation_context"]["legacy"])
+        self.assertEqual(Path(report["evolution_catalog"]), ROOT / ".runtime/projects/blackbox-ab-fixture/evolution-catalog.json")
+        catalog = json.loads(Path(report["evolution_catalog"]).read_text(encoding="utf-8"))
+        indexed = next(item for item in catalog["experiments"] if item["experiment_id"] == report["evolution_experiment_id"])
+        identity = indexed["evaluation_context"]["identity"]
+        self.assertEqual(identity["project_id"], "blackbox-ab-fixture")
+        self.assertEqual(identity["agent_id"], "blackbox-ab")
+        self.assertEqual(identity["experiment_id"], report["evolution_experiment_id"])
+        self.assertEqual(identity["baseline_version"], "v1")
+        self.assertEqual(identity["candidate_version"], "v2")
         self.assertEqual(sum(len(summary["jobs"]) for summary in report["summaries"].values()), 6)
         self.assertTrue(all(
             job["agent_source_hash_matches_protocol"]

@@ -1,7 +1,9 @@
 import json
 import os
+import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -107,6 +109,62 @@ class AgentSpecTests(unittest.TestCase):
 
         self.assertIsInstance(snapshot["entrypoint_hash"], str)
         self.assertEqual(snapshot["source_scope"], "entrypoint_only")
+
+    def test_snapshot_hashes_the_agent_git_worktree_not_just_its_entrypoint(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "agent.py"
+            dependency = root / "prompts.py"
+            source.write_text("from prompts import SYSTEM\n", encoding="utf-8")
+            dependency.write_text("SYSTEM = 'first'\n", encoding="utf-8")
+            for command in (["git", "init"], ["git", "add", "."], ["git", "commit", "-m", "initial"]):
+                subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
+            spec = load_agent_spec(self._write(root, self._base([sys.executable, str(source)])))
+            before = spec.snapshot()
+            dependency.write_text("SYSTEM = 'changed'\n", encoding="utf-8")
+            after = spec.snapshot()
+
+        self.assertEqual(before["source_scope"], "git_worktree")
+        self.assertEqual(before["entrypoint_hash"], after["entrypoint_hash"])
+        self.assertNotEqual(before["agent_source_hash"], after["agent_source_hash"])
+
+    def test_snapshot_hashes_python_module_worktree_not_its_interpreter(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "demo_agent"
+            package.mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "__main__.py").write_text("from .prompts import SYSTEM\n", encoding="utf-8")
+            prompts = package / "prompts.py"
+            prompts.write_text("SYSTEM = 'first'\n", encoding="utf-8")
+            for command in (["git", "init"], ["git", "add", "."], ["git", "commit", "-m", "initial"]):
+                subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
+            with mock.patch.dict(os.environ, {"PYTHONPATH": str(root)}, clear=False):
+                spec = load_agent_spec(self._write(root, self._base([
+                    sys.executable, "-m", "demo_agent", "--workspace", "{workspace}", "--task", "{task}",
+                ])))
+                before = spec.snapshot()
+                prompts.write_text("SYSTEM = 'changed'\n", encoding="utf-8")
+                after = spec.snapshot()
+
+        self.assertEqual(before["source_scope"], "git_worktree")
+        self.assertNotEqual(before["agent_source_hash"], after["agent_source_hash"])
+
+    def test_project_id_is_normalized_into_the_agent_snapshot(self):
+        with TemporaryDirectory() as directory:
+            value = self._base([sys.executable])
+            value["project_id"] = "coding-agent-platform"
+            spec = load_agent_spec(self._write(Path(directory), value))
+
+        self.assertEqual(spec.project_id, "coding-agent-platform")
+        self.assertEqual(spec.snapshot()["project_id"], "coding-agent-platform")
+
+    def test_project_id_rejects_path_like_values(self):
+        with TemporaryDirectory() as directory:
+            value = self._base([sys.executable])
+            value["project_id"] = "../other-project"
+            with self.assertRaisesRegex(AgentSpecError, "project_id must match"):
+                load_agent_spec(self._write(Path(directory), value))
 
 
 if __name__ == "__main__":

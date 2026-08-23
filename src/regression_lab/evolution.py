@@ -124,6 +124,9 @@ def validate_agent_version(payload: dict[str, Any]) -> EvolutionValidation:
         return EvolutionValidation(False, ("agent_version must be an object",))
     _identifier(payload, "version_id", errors)
     _identifier(payload, "agent_id", errors)
+    project_id = payload.get("project_id")
+    if project_id is not None and (not isinstance(project_id, str) or not IDENTIFIER_PATTERN.fullmatch(project_id)):
+        errors.append("project_id must be null or a safe identifier")
     _required_string(payload, "version", errors)
     parent = payload.get("parent_version_id")
     if parent is not None and (not isinstance(parent, str) or not IDENTIFIER_PATTERN.fullmatch(parent)):
@@ -158,6 +161,9 @@ def validate_experiment(payload: dict[str, Any]) -> EvolutionValidation:
     if not isinstance(payload, dict):
         return EvolutionValidation(False, ("experiment must be an object",))
     _identifier(payload, "experiment_id", errors)
+    project_id = payload.get("project_id")
+    if project_id is not None and (not isinstance(project_id, str) or not IDENTIFIER_PATTERN.fullmatch(project_id)):
+        errors.append("project_id must be null or a safe identifier")
     _required_string(payload, "name", errors)
     _identifier(payload, "baseline_version_id", errors)
     _identifier(payload, "candidate_version_id", errors)
@@ -245,6 +251,12 @@ def validate_evolution_document(payload: dict[str, Any]) -> EvolutionValidation:
         return EvolutionValidation(False, ("evolution document must be an object",))
     if payload.get("schema_version") != EVOLUTION_SCHEMA_VERSION:
         errors.append(f"schema_version must be {EVOLUTION_SCHEMA_VERSION}")
+    project = payload.get("project")
+    if project is not None:
+        if not isinstance(project, dict):
+            errors.append("project must be an object")
+        elif not isinstance(project.get("project_id"), str) or not IDENTIFIER_PATTERN.fullmatch(project["project_id"]):
+            errors.append("project.project_id must be a safe identifier")
     collections = {}
     for name, validator in (("agents", validate_agent), ("versions", validate_agent_version),
                             ("cases", validate_case), ("experiments", validate_experiment),

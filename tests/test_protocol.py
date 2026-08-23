@@ -76,7 +76,7 @@ class ProtocolTests(unittest.TestCase):
             snapshot = {
                 "agent_id": "demo", "version": "v1", "observation_mode": "blackbox",
                 "normalized_command": ["python", "agent.py"], "capabilities": {"trace": True},
-                "agent_spec_hash": "sha256:spec", "entrypoint_hash": "sha256:entrypoint",
+                "agent_spec_hash": "sha256:spec", "agent_source_hash": "sha256:source", "entrypoint_hash": "sha256:entrypoint",
                 "source_scope": "entrypoint_only",
             }
             protocol = build_protocol(
@@ -85,7 +85,7 @@ class ProtocolTests(unittest.TestCase):
                 agent_snapshots={"baseline": snapshot},
             )
         baseline = next(item for item in protocol["agents"] if item["label"] == "baseline")
-        self.assertEqual(baseline["agent_source_hash"], "sha256:entrypoint")
+        self.assertEqual(baseline["agent_source_hash"], "sha256:source")
         self.assertEqual(baseline["agent_spec_snapshot"], snapshot)
 
     def test_per_arm_external_configs_keep_sdk_and_blackbox_capabilities_distinct(self):

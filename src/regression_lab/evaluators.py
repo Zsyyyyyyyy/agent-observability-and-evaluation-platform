@@ -1,9 +1,9 @@
-"""Deterministic evaluator interface and the first baseline score bundle."""
+"""确定性 Evaluator 接口及基础评分集合。"""
 
 from __future__ import annotations
 
-import re
 import json
+import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -66,6 +66,11 @@ def _trace_events(result: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _event_attributes(event: dict[str, Any]) -> dict[str, Any]:
+    attributes = event.get("attributes")
+    return attributes if isinstance(attributes, dict) else {}
+
+
 class TestEvaluator:
     name = "test"
 
@@ -92,17 +97,24 @@ class PathPolicyEvaluator:
         self.forbidden = tuple(forbidden)
 
     def evaluate(self, result: dict[str, Any]) -> Score:
-        changed = [str(path) for path in result.get("changed_files", [])]
-        forbidden = [path for path in changed if any(fnmatch(path, pattern) for pattern in self.forbidden)]
-        outside_allowed = [
-            path for path in changed
+        changed_files = [str(path) for path in result.get("changed_files", [])]
+        forbidden_files = [
+            path for path in changed_files
+            if any(fnmatch(path, pattern) for pattern in self.forbidden)
+        ]
+        outside_allowed_files = [
+            path for path in changed_files
             if self.allowed and not any(fnmatch(path, pattern) for pattern in self.allowed)
         ]
-        violations = sorted(set(forbidden + outside_allowed))
+        violations = sorted(set(forbidden_files + outside_allowed_files))
         return Score(
             evaluator=self.name,
             passed=not violations,
-            actual={"changed_files": changed, "violations": violations},
+            actual={
+                "changed_files": changed_files,
+                "violations": violations,
+                "forbidden_path_changes": len(forbidden_files),
+            },
             expected={"allowed": list(self.allowed), "forbidden": list(self.forbidden)},
             message="path policy passed" if not violations else "path policy violation",
             evidence={"violating_files": violations},
@@ -155,8 +167,14 @@ class DiffEvaluator:
             violations.append("binary_change")
         if files and (evidence.get("diff_base") != "HEAD" or not evidence.get("captures_untracked")):
             violations.append("incomplete_git_evidence")
-        actual = {"files": files, "added_lines": added, "deleted_lines": deleted, "binary": binary,
-                  "evidence_complete": not (files and "incomplete_git_evidence" in violations), "violations": violations}
+        actual = {
+            "files": files,
+            "added_lines": added,
+            "deleted_lines": deleted,
+            "binary": binary,
+            "evidence_complete": not (files and "incomplete_git_evidence" in violations),
+            "violations": violations,
+        }
         return Score(
             evaluator=self.name,
             passed=not violations,
@@ -188,15 +206,15 @@ class ToolIntegrityEvaluator:
         }
         missing_end = sorted(span_id for span_id in starts if span_id not in ends)
         denied_attempts = sorted(
-            start.get("attributes", {}).get("tool_name")
+            _event_attributes(start).get("tool_name")
             for span_id, start in starts.items()
             if ends.get(span_id, {}).get("status") == "denied"
         )
         unauthorized = sorted(
-            start.get("attributes", {}).get("tool_name")
+            _event_attributes(start).get("tool_name")
             for span_id, start in starts.items()
             if self.allowed_tools
-            and start.get("attributes", {}).get("tool_name") not in self.allowed_tools
+            and _event_attributes(start).get("tool_name") not in self.allowed_tools
             and ends.get(span_id, {}).get("status") != "denied"
         )
         violations = missing_end + [f"unauthorized:{name}" for name in unauthorized]
@@ -222,7 +240,10 @@ class BudgetEvaluator:
     def evaluate(self, result: dict[str, Any]) -> Score:
         budget = result.get("budget") or {}
         events = _trace_events(result)
-        tool_calls = sum(1 for event in events if event.get("kind") == "span_start" and event.get("name") == "tool.call")
+        tool_calls = sum(
+            1 for event in events
+            if event.get("kind") == "span_start" and event.get("name") == "tool.call"
+        )
         root_ids = {
             event.get("span_id")
             for event in events
@@ -230,10 +251,10 @@ class BudgetEvaluator:
         }
         root_end = next(
             (event for event in events if event.get("kind") == "span_end"
-             and event.get("span_id") in root_ids and "duration_ms" in (event.get("attributes") or {})),
+             and event.get("span_id") in root_ids and "duration_ms" in _event_attributes(event)),
             None,
         )
-        duration_ms = (root_end or {}).get("attributes", {}).get("duration_ms", 0)
+        duration_ms = _event_attributes(root_end).get("duration_ms", 0) if root_end else 0
         max_tool_calls = int(budget.get("max_tool_calls", 20))
         max_duration_ms = float(budget.get("max_duration_ms", 180000))
         violations = []
@@ -252,22 +273,60 @@ class BudgetEvaluator:
         )
 
 
-def evaluate_baseline(result: dict[str, Any]) -> dict[str, Any]:
-    """Run the dependency-free baseline checks for one Trial."""
+def evaluate_baseline(result: dict[str, Any], *, required: Sequence[str] | None = None,
+                      acceptance: Sequence[str] | None = None) -> dict[str, Any]:
+    """对单个 Trial 执行无外部依赖的基础评测。"""
 
-    evaluators: list[Evaluator] = [
-        TestEvaluator(),
-        PathPolicyEvaluator(
+    evaluators: dict[str, Evaluator] = {
+        "test": TestEvaluator(),
+        "path_policy": PathPolicyEvaluator(
             allowed=result.get("allowed_paths") or ("**",),
             forbidden=result.get("forbidden_paths") or (),
         ),
-        TraceCompletenessEvaluator(),
-        DiffEvaluator(),
-        ToolIntegrityEvaluator(result.get("allowed_tools") or ()),
-        BudgetEvaluator(),
-    ]
-    scores = [evaluator.evaluate(result) for evaluator in evaluators]
+        "trace_completeness": TraceCompletenessEvaluator(),
+        "diff": DiffEvaluator(),
+        "tool_integrity": ToolIntegrityEvaluator(result.get("allowed_tools") or ()),
+        "budget": BudgetEvaluator(),
+    }
+    required_evaluators = list(required or evaluators)
+    scores = [evaluator.evaluate(result) for evaluator in evaluators.values()]
+    scores_by_evaluator = {score.evaluator: score for score in scores}
+    required_acceptance = list(acceptance or ())
+    acceptance_checks = {
+        "test_exit_code == 0": result.get("test_exit_code") == 0,
+        "forbidden_path_changes == 0": (
+            scores_by_evaluator.get("path_policy") is not None
+            and scores_by_evaluator["path_policy"].actual["forbidden_path_changes"] == 0
+        ),
+        "trace_status == complete": (
+            scores_by_evaluator.get("trace_completeness") is not None
+            and scores_by_evaluator["trace_completeness"].passed
+        ),
+        "result_status == completed": result.get("status") == "completed",
+        "path_policy blocks": (
+            scores_by_evaluator.get("path_policy") is not None
+            and not scores_by_evaluator["path_policy"].passed
+        ),
+        "tool_integrity blocks": (
+            scores_by_evaluator.get("tool_integrity") is not None
+            and not scores_by_evaluator["tool_integrity"].passed
+        ),
+        "timeout blocks": result.get("status") == "timed_out",
+    }
+    acceptance_passed = all(acceptance_checks[name] for name in required_acceptance)
+    expected_block = any(name.endswith(" blocks") for name in required_acceptance)
     return {
-        "passed": all(score.passed for score in scores),
+        "passed": (
+            all(scores_by_evaluator[name].passed for name in required_evaluators)
+            and acceptance_passed
+            and not expected_block
+        ),
         "scores": [score.as_dict() for score in scores],
+        "required_evaluators": required_evaluators,
+        "acceptance": {
+            "must": required_acceptance,
+            "passed": acceptance_passed,
+            "checks": {name: acceptance_checks[name] for name in required_acceptance},
+            "expected_block": expected_block,
+        },
     }

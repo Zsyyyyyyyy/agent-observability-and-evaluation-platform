@@ -48,6 +48,24 @@ class ExternalCommandAdapterTests(unittest.TestCase):
         )
         return agent
 
+    def test_external_environment_uses_an_explicit_allowlist(self):
+        with mock.patch.dict(
+            worker.os.environ,
+            {
+                "PATH": "/usr/bin",
+                "OPENAI_API_KEY": "agent-key",
+                "UNRELATED_PLATFORM_SECRET": "must-not-leak",
+                "PYTHONPATH": "/private/platform/imports",
+            },
+            clear=True,
+        ):
+            environment = worker._external_environment()
+
+        self.assertEqual(environment["PATH"], "/usr/bin")
+        self.assertEqual(environment["OPENAI_API_KEY"], "agent-key")
+        self.assertEqual(environment["PYTHONPATH"], str(worker.ROOT / "src"))
+        self.assertNotIn("UNRELATED_PLATFORM_SECRET", environment)
+
     def test_external_agent_runs_with_platform_owned_evidence(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

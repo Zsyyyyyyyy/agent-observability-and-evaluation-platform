@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from regression_lab.agent_spec import AgentSpecError, load_agent_spec
 from regression_lab.gate import evaluate_gate
+from regression_lab.integrity import verify_experiment_runtime
 from regression_lab.protocol import write_json_atomically
 
 
@@ -27,6 +28,7 @@ def _validate_agent(path: str) -> int:
         return 2
     config = spec.as_external_command_config()
     print("Agent spec is valid")
+    print(f"  Project: {spec.project_id or 'unassigned (legacy-compatible)'}")
     print(f"  Agent: {spec.agent_id} · {spec.version}")
     print(f"  Launch: {' '.join(spec.command)}")
     print(f"  Observation: {spec.observation_mode}")
@@ -179,6 +181,10 @@ def _validate_experiment_specs(baseline_path: str, candidate_path: str):
         raise AgentSpecError("baseline.agent.version and candidate.agent.version must be different")
     if baseline.observation_mode != candidate.observation_mode:
         raise AgentSpecError("baseline and candidate observation.mode must match (blackbox vs sdk is not comparable)")
+    if baseline.project_id is None or candidate.project_id is None:
+        raise AgentSpecError("baseline and candidate project_id are required for a version Experiment")
+    if baseline.project_id != candidate.project_id:
+        raise AgentSpecError("baseline and candidate project_id must be the same")
     return baseline, candidate
 
 
@@ -192,8 +198,9 @@ def _gate_missing_evidence(gate: dict[str, object]) -> list[str]:
 
 
 def _print_experiment(runtime: Path, report: dict[str, object] | None, gate: dict[str, object] | None,
-                      agent_id: str, baseline_version: str, candidate_version: str) -> None:
+                      project_id: str, agent_id: str, baseline_version: str, candidate_version: str) -> None:
     print("Experiment complete\n")
+    print(f"Project: {project_id}")
     print(f"Agent: {agent_id}")
     print(f"Baseline: {baseline_version}")
     print(f"Candidate: {candidate_version}")
@@ -233,7 +240,8 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
         return 2
     root = Path(__file__).resolve().parents[1]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    runtime = root / ".runtime" / "agent-experiment" / f"{baseline.agent_id}-{baseline.version}-vs-{candidate.version}-{stamp}"
+    assert baseline.project_id is not None
+    runtime = root / ".runtime" / "projects" / baseline.project_id / "experiments" / f"{baseline.agent_id}-{baseline.version}-vs-{candidate.version}-{stamp}"
     arm_configs = {
         "baseline": {**baseline.as_external_command_config(), "agent_spec_snapshot": baseline.snapshot()},
         "candidate": {**candidate.as_external_command_config(), "agent_spec_snapshot": candidate.snapshot()},
@@ -242,7 +250,7 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
         sys.executable, str(root / "scripts" / "run_experiment.py"),
         "--adapter", "external-command", "--agents", f"baseline:{baseline.version},candidate:{candidate.version}",
         "--external-arm-configs", json.dumps(arm_configs), "--trials", str(trials),
-        "--output-dir", str(runtime),
+        "--output-dir", str(runtime), "--project-id", baseline.project_id,
     ]
     for benchmark in benchmarks:
         command.extend(["--manifest", str(Path(benchmark).resolve())])
@@ -257,7 +265,7 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
             write_json_atomically(runtime / "gate-report.json", gate)
         except ValueError as exc:
             print(f"Gate evaluation error: {exc}", file=sys.stderr)
-    _print_experiment(runtime, report, gate, baseline.agent_id, baseline.version, candidate.version)
+    _print_experiment(runtime, report, gate, baseline.project_id, baseline.agent_id, baseline.version, candidate.version)
     if completed.returncode not in {0, 1}:
         diagnostic = completed.stderr.strip() or completed.stdout.strip()
         if diagnostic:
@@ -265,6 +273,12 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
     if open_console and runtime.exists():
         return _serve_console(runtime, port)
     return completed.returncode
+
+
+def _verify_experiment(runtime: str) -> int:
+    report = verify_experiment_runtime(runtime)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["valid"] else 1
 
 
 def main() -> int:
@@ -290,6 +304,10 @@ def main() -> int:
     run.add_argument("--unsafe-trusted-host", action="store_true", help="run platform tests on this trusted host instead of Docker")
     run.add_argument("--open", action="store_true", help="open the read-only Console after the Experiment completes")
     run.add_argument("--port", type=int, help="Console port used with --open")
+    verify = experiment_commands.add_parser(
+        "verify", help="verify Protocol, schedule, selected Attempts, Traces, and Gate linkage"
+    )
+    verify.add_argument("--runtime", required=True, help="completed Experiment Runtime directory")
     console = commands.add_parser("console", help="serve a read-only Console for an existing runtime")
     console.add_argument("--runtime", required=True, help="Experiment or Trial runtime directory")
     console.add_argument("--port", type=int, help="Console port; defaults to the first free port from 8765")
@@ -301,6 +319,8 @@ def main() -> int:
     if args.command == "experiment" and args.experiment_command == "run":
         return _run_experiment(args.baseline, args.candidate, args.benchmark, args.trials, args.unsafe_trusted_host,
                                open_console=args.open, port=args.port)
+    if args.command == "experiment" and args.experiment_command == "verify":
+        return _verify_experiment(args.runtime)
     if args.command == "console":
         return _serve_console(Path(args.runtime).resolve(), args.port)
     parser.error("unsupported command")

@@ -7,6 +7,22 @@ from regression_lab.behavior_diff import behavior_deltas, snapshot_trial_behavio
 
 
 class BehaviorDiffTests(unittest.TestCase):
+    def test_snapshot_tolerates_malformed_trace_attributes(self):
+        with TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "trace.jsonl"
+            trace_path.write_text(
+                '\n'.join([
+                    json.dumps({"kind": "span_start", "event_seq": 1, "span_id": "model", "name": "model.call", "attributes": []}),
+                    json.dumps({"kind": "span_end", "event_seq": 2, "span_id": "model", "status": "ok", "attributes": []}),
+                ]),
+                encoding="utf-8",
+            )
+
+            snapshot = snapshot_trial_behavior({"trace_path": str(trace_path), "adapter_id": "external-command"})
+
+        self.assertEqual(snapshot["model_calls"], 1)
+        self.assertIsNone(snapshot["total_tokens"])
+
     def _result(self, directory: Path, *, model_calls: int, tool_calls: list[tuple[str, str]], duration_ms: int) -> dict:
         events = []
         sequence = 0
