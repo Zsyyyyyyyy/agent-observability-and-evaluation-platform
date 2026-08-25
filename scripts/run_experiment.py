@@ -182,19 +182,24 @@ def parse_external_arm_configs(value: str | None, agents: list[dict[str, str]]) 
 def build_comparison_arms(agents: list[dict[str, str]], summaries: dict[str, dict]) -> dict[str, dict]:
     """让每个候选版本分别与第一个 Champion Agent 建立比较臂。"""
 
-    champion_id = agents[0]["id"]
-    return {
-        candidate["id"]: {
+    champion = agents[0]
+    champion_id = champion["id"]
+    champion_version = champion["version"]
+    champion_summary = summaries[champion_id]
+    comparison_arms: dict[str, dict] = {}
+    for candidate in agents[1:]:
+        candidate_id = candidate["id"]
+        comparison_arms[candidate_id] = {
             "baseline_id": champion_id,
-            "candidate_id": candidate["id"],
+            "candidate_id": candidate_id,
             "comparison": compare_summaries(
-                summaries[champion_id], summaries[candidate["id"]],
-                baseline_version=next(agent["version"] for agent in agents if agent["id"] == champion_id),
+                champion_summary,
+                summaries[candidate_id],
+                baseline_version=champion_version,
                 candidate_version=candidate["version"],
             ),
         }
-        for candidate in agents[1:]
-    }
+    return comparison_arms
 
 
 def pairwise_report(report: dict, arm: dict) -> dict:
@@ -206,15 +211,25 @@ def pairwise_report(report: dict, arm: dict) -> dict:
 
     baseline_id, candidate_id = arm["baseline_id"], arm["candidate_id"]
     comparison = arm["comparison"]
-    return {
+    pairwise = {
         **report,
         "agents": [item for item in report["agents"] if item["id"] in {baseline_id, candidate_id}],
         "baseline_id": baseline_id,
         "candidate_id": candidate_id,
         "comparison": comparison,
         "summaries": {label: report["summaries"][label] for label in (baseline_id, candidate_id)},
-        **{key: comparison[key] for key in ("case_comparisons", "reliability", "efficiency", "behavior", "behavior_diff", "failure_attribution", "statistics")},
     }
+    for field in (
+        "case_comparisons",
+        "reliability",
+        "efficiency",
+        "behavior",
+        "behavior_diff",
+        "failure_attribution",
+        "statistics",
+    ):
+        pairwise[field] = comparison[field]
+    return pairwise
 
 
 def _attempt_source_comparability(protocol: dict, agents: list[dict[str, str]], summaries: dict[str, dict]) -> dict[str, object]:
@@ -238,7 +253,9 @@ def _attempt_source_comparability(protocol: dict, agents: list[dict[str, str]], 
             if actual != expected:
                 mismatches.append(f"{agent['id']}:{job.get('job_id', 'unknown')}")
     # 任一 Attempt 的来源不匹配，就不能把本次结果视为严格可比。
-    return {"level": "strict", "differences": []} if not mismatches else {
+    if not mismatches:
+        return {"level": "strict", "differences": []}
+    return {
         "level": "not_comparable", "differences": ["attempt_agent_source_hash"], "mismatched_attempts": mismatches,
     }
 
@@ -308,8 +325,10 @@ def _run_execution_plan(
         for item in protocol.get("agents", [])
         if isinstance(item, dict)
     }
+    uses_external_command = external_command is not None or external_arm_configs is not None
     for entry in execution_plan["entries"]:
-        agent = agents_by_label[entry["agent_label"]]
+        agent_label = entry["agent_label"]
+        agent = agents_by_label[agent_label]
         manifest_path, manifest = manifests_by_id[entry["case_id"]]
         agent_dir = safe_child_path(output_dir, agent["id"], "agent id")
         case_dir = safe_child_path(agent_dir, manifest["id"], "manifest id")
@@ -335,8 +354,8 @@ def _run_execution_plan(
                 "--adapter-capabilities", json.dumps(config["adapter_capabilities"]),
                 "--external-observation-mode", str(config["observation_mode"]),
             ])
-        expected_source = expected_source_by_label.get(agent["id"])
-        if (external_command is not None or external_arm_configs is not None) and isinstance(expected_source, str):
+        expected_source = expected_source_by_label.get(agent_label)
+        if uses_external_command and isinstance(expected_source, str):
             command.extend(["--expected-agent-source-hash", expected_source])
         if args.trials:
             command.extend(["--trials", str(args.trials)])
@@ -446,24 +465,25 @@ def _index_evolution_report(
 ) -> None:
     """把每个比较臂写入 Evolution Catalog，并补齐报告的演进身份。"""
 
-    catalog_path = (
-        Path(catalog_argument).resolve()
-        if catalog_argument
-        else REGRESSION / ".runtime" / "projects" / project_id / "evolution-catalog.json"
-        if project_id is not None
-        else output_dir.parent / "evolution-catalog.json"
-    )
+    if catalog_argument:
+        catalog_path = Path(catalog_argument).resolve()
+    elif project_id is not None:
+        catalog_path = REGRESSION / ".runtime" / "projects" / project_id / "evolution-catalog.json"
+    else:
+        catalog_path = output_dir.parent / "evolution-catalog.json"
+
     catalog = EvolutionCatalog(catalog_path)
-    experiment_ids = {
-        arm_id: catalog.index_experiment(
-            pairwise_report(report, arm),
+    manifest_documents = [manifest for _, manifest in manifests]
+    experiment_ids: dict[str, str] = {}
+    for arm_id, comparison_arm in comparison_arms.items():
+        experiment_ids[arm_id] = catalog.index_experiment(
+            pairwise_report(report, comparison_arm),
             artifact_root=output_dir,
-            manifests=[manifest for _, manifest in manifests],
+            manifests=manifest_documents,
             project_id=project_id,
         )
-        for arm_id, arm in comparison_arms.items()
-    }
-    report["evolution_experiment_id"] = experiment_ids[primary_arm_id]
+    primary_experiment_id = experiment_ids[primary_arm_id]
+    report["evolution_experiment_id"] = primary_experiment_id
     report["evolution_experiment_ids"] = experiment_ids
     report["evolution_catalog"] = str(catalog_path)
 
@@ -471,7 +491,7 @@ def _index_evolution_report(
     indexed_experiment = next(
         (
             item for item in catalog_document["experiments"]
-            if item.get("experiment_id") == report["evolution_experiment_id"]
+            if item.get("experiment_id") == primary_experiment_id
         ),
         {},
     )
@@ -480,15 +500,16 @@ def _index_evolution_report(
         indexed_experiment.get("candidate_version_id"),
     }
     agent_ids = {
-        item.get("agent_id")
-        for item in catalog_document["versions"]
-        if item.get("version_id") in version_ids and isinstance(item.get("agent_id"), str)
+        version.get("agent_id")
+        for version in catalog_document["versions"]
+        if version.get("version_id") in version_ids
+        and isinstance(version.get("agent_id"), str)
     }
     report["evaluation_context"] = {
         "schema_version": 1,
         "project_id": project_id,
         "agent_id": agent_ids.pop() if len(agent_ids) == 1 else None,
-        "experiment_id": report["evolution_experiment_id"],
+        "experiment_id": primary_experiment_id,
         "baseline_version": agents[0]["version"],
         "candidate_version": agents[1]["version"],
         "legacy": False,
@@ -591,6 +612,162 @@ def _resolve_execution_config(
     return agents, external_arm_configs, external_command, adapter_capabilities
 
 
+def _load_and_expand_manifests(
+    args: argparse.Namespace,
+) -> tuple[list[tuple[Path, dict]], list[dict]] | None:
+    """读取、校验 Case Manifest，并展开为具体 Trial。"""
+
+    manifests: list[tuple[Path, dict]] = []
+    jobs: list[dict] = []
+    for path in args.manifest:
+        manifest_path = Path(path).resolve()
+        manifest = load_manifest(manifest_path)
+        validation = validate_manifest(manifest, REGRESSION)
+        if not validation.valid:
+            print(json.dumps(validation.as_dict(), ensure_ascii=False, indent=2), file=sys.stderr)
+            return None
+        manifests.append((manifest_path, manifest))
+        jobs.extend(expand_trials(manifest, REGRESSION, args.trials))
+    return manifests, jobs
+
+
+def _freeze_or_restore_protocol(
+    args: argparse.Namespace,
+    *,
+    agents: list[dict[str, str]],
+    manifests: list[tuple[Path, dict]],
+    jobs: list[dict],
+    output_dir: Path,
+    external_command: list[str] | None,
+    external_arm_configs: dict[str, dict[str, object]] | None,
+    adapter_capabilities: dict[str, object] | None,
+    use_docker: bool,
+) -> tuple[dict, dict[str, object]] | None:
+    """冻结新 Protocol，或从已有 Artifact 恢复并校验 Protocol。"""
+
+    manifest_documents = [manifest for _, manifest in manifests]
+    prompt_profiles: dict[str, dict[str, str]] = {}
+    if not args.report_only and external_arm_configs is not None:
+        for agent in agents:
+            arm_config = external_arm_configs[agent["id"]]
+            if arm_config["observation_mode"] == "blackbox":
+                continue
+            prompt_profiles.update(
+                describe_prompt_profiles(
+                    arm_config["external_command"],
+                    [agent],
+                    manifest_documents,
+                )
+            )
+    elif not args.report_only:
+        prompt_profiles = describe_prompt_profiles(external_command, agents, manifest_documents)
+
+    sdk_agent_count = len(agents)
+    if external_arm_configs is not None:
+        sdk_agent_count = sum(
+            config["observation_mode"] == "sdk"
+            for config in external_arm_configs.values()
+        )
+    if (
+        not args.report_only
+        and args.adapter == "external-command"
+        and len(prompt_profiles) != sdk_agent_count
+    ):
+        print(
+            "PROTOCOL ERROR: external Agent must support --describe-protocol for every compared version.",
+            file=sys.stderr,
+        )
+        return None
+
+    agent_snapshots = {
+        label: config["agent_spec_snapshot"]
+        for label, config in (external_arm_configs or {}).items()
+        if isinstance(config.get("agent_spec_snapshot"), dict)
+    }
+    protocol = build_protocol(
+        manifests=manifest_documents,
+        agents=agents,
+        adapter=args.adapter,
+        external_command=external_command,
+        trials=args.trials or max(int(job["trial_index"]) for job in jobs),
+        use_docker=use_docker,
+        bash=args.bash,
+        schedule_seed=args.schedule_seed,
+        comparison_intent=args.comparison_intent,
+        allowed_differences=args.allowed_differences or ["agents[].prompt_profile"],
+        prompt_profiles=prompt_profiles,
+        adapter_capabilities=adapter_capabilities,
+        agent_snapshots=agent_snapshots,
+    )
+
+    protocol_path = output_dir / "protocol.json"
+    protocol_comparability: dict[str, object] = {"level": "strict", "differences": []}
+    if args.report_only and not protocol_path.exists():
+        # 历史产物可能早于协议冻结；报告重建不能凭空创建快照并把旧证据标成严格可比。
+        return {}, {"level": "not_available", "differences": ["protocol.json"]}
+    if not protocol_path.exists():
+        if not args.report_only:
+            write_json_atomically(protocol_path, protocol)
+        return protocol, protocol_comparability
+
+    try:
+        persisted_protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"PROTOCOL ERROR: unreadable {protocol_path}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(persisted_protocol, dict):
+        print(f"PROTOCOL ERROR: {protocol_path} must contain an object", file=sys.stderr)
+        return None
+
+    protocol_comparability = compare_protocols(persisted_protocol, protocol)
+    if args.report_only:
+        # 同一输出目录中的 Trial 共用可读的冻结协议；重建派生报告时应以它为准，
+        # 不能依赖可能被修改过的 experiment.json 字段。
+        return persisted_protocol, {"level": "strict", "differences": []}
+    if protocol_comparability["level"] != "strict" and not args.allow_protocol_mismatch:
+        print(
+            "PROTOCOL MISMATCH: refusing to resume a non-comparable experiment; use a new output directory.",
+            file=sys.stderr,
+        )
+        return None
+    if protocol_comparability["level"] != "strict":
+        # 允许协议不一致时，保留带指纹的修订快照，而不是覆盖原协议。
+        revision = output_dir / f"protocol-{protocol['protocol_fingerprint'].removeprefix('sha256:')[:16]}.json"
+        write_json_atomically(revision, protocol)
+        return protocol, protocol_comparability
+    return persisted_protocol, protocol_comparability
+
+
+def _build_and_persist_execution_plan(
+    args: argparse.Namespace,
+    jobs: list[dict],
+    agents: list[dict[str, str]],
+    output_dir: Path,
+) -> dict | None:
+    """构建配对执行计划，并拒绝改写已冻结的计划。"""
+
+    execution_plan = build_execution_plan(jobs, agents, seed=args.schedule_seed)
+    if args.report_only:
+        return execution_plan
+
+    plan_path = output_dir / "execution-plan.json"
+    if not plan_path.exists():
+        write_json_atomically(plan_path, execution_plan)
+        return execution_plan
+    try:
+        previous_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        previous_plan = None
+    if previous_plan != execution_plan:
+        # 已开始的实验不能悄悄改变配对顺序，否则会破坏可复现实验条件。
+        print(
+            "EXECUTION PLAN MISMATCH: refusing to change the persisted paired schedule.",
+            file=sys.stderr,
+        )
+        return None
+    return execution_plan
+
+
 def main() -> int:
     """解析命令行参数，执行实验，并返回适合命令行使用的退出码。"""
 
@@ -605,18 +782,12 @@ def main() -> int:
         _resolve_execution_config(parser, args)
     )
 
-    # 读取并校验所有 Case，再把 Case 展开成具体的 Job/Trial。
-    manifest_paths = [Path(path).resolve() for path in args.manifest]
-    manifests = []
-    jobs = []
-    for manifest_path in manifest_paths:
-        manifest = load_manifest(manifest_path)
-        validation = validate_manifest(manifest, REGRESSION)
-        if not validation.valid:
-            print(json.dumps(validation.as_dict(), ensure_ascii=False, indent=2), file=sys.stderr)
-            return 2
-        manifests.append((manifest_path, manifest))
-        jobs.extend(expand_trials(manifest, REGRESSION, args.trials))
+    # 加载实验输入。
+    experiment_input = _load_and_expand_manifests(args)
+    if experiment_input is None:
+        return 2
+    manifests, jobs = experiment_input
+
     expanded = expand_experiment(jobs, agents)
     if args.dry_run:
         # dry-run 只展示展开后的实验，不创建目录、不调用 Agent。
@@ -625,85 +796,28 @@ def main() -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    # 报告重建不能再次调用外部 Agent；正常运行时则先冻结 Prompt Profile 元数据。
-    prompt_profiles: dict[str, dict[str, str]] = {}
-    if not args.report_only and external_arm_configs is not None:
-        for agent in agents:
-            config = external_arm_configs[agent["id"]]
-            if config["observation_mode"] == "blackbox":
-                continue
-            prompt_profiles.update(describe_prompt_profiles(config["external_command"], [agent], [manifest for _, manifest in manifests]))
-    elif not args.report_only:
-        prompt_profiles = describe_prompt_profiles(external_command, agents, [manifest for _, manifest in manifests])
-    sdk_agent_count = len(agents) if external_arm_configs is None else sum(
-        config["observation_mode"] == "sdk" for config in external_arm_configs.values()
-    )
-    if not args.report_only and args.adapter == "external-command" and len(prompt_profiles) != sdk_agent_count:
-        print("PROTOCOL ERROR: external Agent must support --describe-protocol for every compared version.", file=sys.stderr)
-        return 2
-    agent_snapshots = {
-        label: config["agent_spec_snapshot"]
-        for label, config in (external_arm_configs or {}).items()
-        if isinstance(config.get("agent_spec_snapshot"), dict)
-    }
-    protocol = build_protocol(
-        manifests=[manifest for _, manifest in manifests], agents=agents, adapter=args.adapter,
-        external_command=external_command, trials=args.trials or max(int(item["trial_index"]) for item in jobs),
-        use_docker=use_docker, bash=args.bash, schedule_seed=args.schedule_seed,
-        comparison_intent=args.comparison_intent,
-        allowed_differences=args.allowed_differences or ["agents[].prompt_profile"],
-        prompt_profiles=prompt_profiles,
-        adapter_capabilities=adapter_capabilities,
-        agent_snapshots=agent_snapshots,
-    )
-    protocol_path = output_dir / "protocol.json"
-    protocol_comparability = {"level": "strict", "differences": []}
-    if args.report_only and not protocol_path.exists():
-        # 历史产物可能早于协议冻结；报告重建不能凭空创建快照并把旧证据标成严格可比。
-        protocol = {}
-        protocol_comparability = {"level": "not_available", "differences": ["protocol.json"]}
-    elif protocol_path.exists():
-        try:
-            persisted_protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"PROTOCOL ERROR: unreadable {protocol_path}: {exc}", file=sys.stderr)
-            return 2
-        if not isinstance(persisted_protocol, dict):
-            print(f"PROTOCOL ERROR: {protocol_path} must contain an object", file=sys.stderr)
-            return 2
-        protocol_comparability = compare_protocols(persisted_protocol, protocol)
-        if args.report_only:
-            protocol = persisted_protocol
-            # 同一输出目录中的 Trial 共用可读的冻结协议；重建派生报告时应以它为准，
-            # 不能依赖可能被修改过的 experiment.json 字段。
-            protocol_comparability = {"level": "strict", "differences": []}
-        elif protocol_comparability["level"] != "strict" and not args.allow_protocol_mismatch:
-            print("PROTOCOL MISMATCH: refusing to resume a non-comparable experiment; use a new output directory.", file=sys.stderr)
-            return 2
-        if not args.report_only and protocol_comparability["level"] != "strict":
-            # 允许协议不一致时，保留带指纹的修订快照，而不是覆盖原协议。
-            revision = output_dir / f"protocol-{protocol['protocol_fingerprint'].removeprefix('sha256:')[:16]}.json"
-            write_json_atomically(revision, protocol)
-        else:
-            protocol = persisted_protocol
-    elif not args.report_only:
-        write_json_atomically(protocol_path, protocol)
 
-    # 执行计划固定 Case、Agent、Trial 的交错顺序，保证成对比较不受运行顺序影响。
-    execution_plan = build_execution_plan(jobs, agents, seed=args.schedule_seed)
-    if not args.report_only:
-        plan_path = output_dir / "execution-plan.json"
-        if plan_path.exists():
-            try:
-                previous_plan = json.loads(plan_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                previous_plan = None
-            if previous_plan != execution_plan:
-                # 已开始的实验不能悄悄改变配对顺序，否则会破坏可复现实验条件。
-                print("EXECUTION PLAN MISMATCH: refusing to change the persisted paired schedule.", file=sys.stderr)
-                return 2
-        else:
-            write_json_atomically(plan_path, execution_plan)
+    # 冻结或恢复实验协议。
+    protocol_state = _freeze_or_restore_protocol(
+        args,
+        agents=agents,
+        manifests=manifests,
+        jobs=jobs,
+        output_dir=output_dir,
+        external_command=external_command,
+        external_arm_configs=external_arm_configs,
+        adapter_capabilities=adapter_capabilities,
+        use_docker=use_docker,
+    )
+    if protocol_state is None:
+        return 2
+    protocol, protocol_comparability = protocol_state
+
+    # 构建并验证执行计划。
+    execution_plan = _build_and_persist_execution_plan(args, jobs, agents, output_dir)
+    if execution_plan is None:
+        return 2
+
     manifests_by_id = {manifest["id"]: (path, manifest) for path, manifest in manifests}
     if not args.report_only:
         returncode = _run_execution_plan(
@@ -721,7 +835,7 @@ def main() -> int:
         if returncode:
             return returncode
 
-    # report-only 模式从这里开始只读取已有产物，不再调用 Agent。
+    # 从不可变证据生成报告；report-only 模式从这里开始不再调用 Agent。
     try:
         summaries = _load_agent_summaries(output_dir, agents, manifests)
     except ManifestError as exc:
@@ -746,6 +860,7 @@ def main() -> int:
     )
     write_json_atomically(output_dir / "experiment.json", report)
 
+    # 写入演进目录。
     try:
         _index_evolution_report(
             report,
@@ -762,6 +877,8 @@ def main() -> int:
         return 2
     write_json_atomically(output_dir / "experiment.json", report)
     print(json.dumps(report["comparison"], ensure_ascii=False, indent=2))
+
+    # 返回 CI 状态。
     # report-only 是对既有证据的读取；历史上失败的 Trial 属于报告数据，
     # 不应被误判为“报告重建失败”。
     if args.report_only:
