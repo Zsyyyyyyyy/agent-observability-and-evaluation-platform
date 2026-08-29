@@ -37,9 +37,15 @@ from regression_lab.protocol import (
     compare_protocols,
     write_json_atomically,
 )
+from regression_lab.paths import asset_root, python_import_root, runtime_root
 
 
-REGRESSION = Path(__file__).resolve().parents[1]
+REGRESSION = asset_root()
+LANGGRAPH_CAPABILITIES = AdapterCapabilities(
+    trace=True, hierarchical_trace=True, model_usage=True, tool_trace=True,
+    tool_semantics=False, test_trace=False, context_trace=False,
+    workflow_trace=True, mcp_trace=False,
+).as_dict()
 
 
 def _hydrate_job_diagnostics(job: dict, case_dir: Path) -> dict:
@@ -165,15 +171,22 @@ def parse_external_arm_configs(value: str | None, agents: list[dict[str, str]]) 
         if capabilities is None:
             raise ValueError(f"--external-arm-configs.{label}.adapter_capabilities must provide every AdapterCapabilities boolean field")
         mode = config.get("observation_mode")
-        if mode not in {"sdk", "blackbox"}:
-            raise ValueError(f"--external-arm-configs.{label}.observation_mode must be sdk or blackbox")
+        if mode not in {"sdk", "blackbox", "langgraph"}:
+            raise ValueError(f"--external-arm-configs.{label}.observation_mode must be sdk, blackbox, or langgraph")
+        if mode == "langgraph" and capabilities.as_dict() != LANGGRAPH_CAPABILITIES:
+            raise ValueError(f"--external-arm-configs.{label}.langgraph capabilities are platform-defined")
         snapshot = config.get("agent_spec_snapshot")
         if snapshot is not None and not isinstance(snapshot, dict):
             raise ValueError(f"--external-arm-configs.{label}.agent_spec_snapshot must be an object")
+        source_root = config.get("agent_source_root")
+        if source_root is not None:
+            if not isinstance(source_root, str) or not Path(source_root).is_absolute() or not Path(source_root).is_dir():
+                raise ValueError(f"--external-arm-configs.{label}.agent_source_root must be an existing absolute directory")
         configs[label] = {
             "external_command": command,
             "adapter_capabilities": capabilities.as_dict(),
             "observation_mode": mode,
+            **({"agent_source_root": source_root} if isinstance(source_root, str) else {}),
             **({"agent_spec_snapshot": snapshot} if isinstance(snapshot, dict) else {}),
         }
     return configs
@@ -261,7 +274,7 @@ def _attempt_source_comparability(protocol: dict, agents: list[dict[str, str]], 
 
 
 def describe_prompt_profiles(command: list[str] | None, agents: list[dict[str, str]],
-                             manifests: list[dict]) -> dict[str, dict[str, str]]:
+                             manifests: list[dict], source_root: str | None = None) -> dict[str, dict[str, str]]:
     """向受信任的外部 Agent 请求最终渲染 Prompt 的哈希。
 
     Prompt Profile 是协议可比性的一部分。外部 Agent 必须通过
@@ -277,13 +290,13 @@ def describe_prompt_profiles(command: list[str] | None, agents: list[dict[str, s
     # 子进程只继承执行所需的最小环境，并确保能导入当前项目的源码。
     environment = {
         "PATH": os.environ.get("PATH", ""),
-        "PYTHONPATH": os.pathsep.join(filter(None, [str(REGRESSION / "src"), str(REGRESSION), os.environ.get("PYTHONPATH", "")])),
+        "PYTHONPATH": os.pathsep.join(filter(None, [source_root, str(python_import_root()), os.environ.get("PYTHONPATH", "")])),
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     try:
         # 该探测只用于读取协议元数据，超时或输出非法时返回空结果，由调用方拒绝实验。
         completed = subprocess.run(
-            [*command, "--describe-protocol"], input=json.dumps(request), cwd=REGRESSION,
+            [*(item.replace("{agent_source}", source_root or "{agent_source}") for item in command), "--describe-protocol"], input=json.dumps(request), cwd=REGRESSION,
             env=environment, text=True, capture_output=True, timeout=10, check=False,
         )
         payload = json.loads(completed.stdout) if completed.returncode == 0 else None
@@ -334,7 +347,7 @@ def _run_execution_plan(
         case_dir = safe_child_path(agent_dir, manifest["id"], "manifest id")
         command = [
             sys.executable,
-            str(REGRESSION / "scripts" / "run_benchmark.py"),
+            "-m", "scripts.run_benchmark",
             "--manifest", str(manifest_path),
             "--output-dir", str(case_dir),
             "--adapter", args.adapter,
@@ -347,6 +360,7 @@ def _run_execution_plan(
             command.extend(["--external-command", json.dumps(external_command)])
             if adapter_capabilities:
                 command.extend(["--adapter-capabilities", json.dumps(adapter_capabilities)])
+            command.extend(["--external-observation-mode", args.external_observation_mode])
         elif external_arm_configs is not None:
             config = external_arm_configs[agent["id"]]
             command.extend([
@@ -354,6 +368,9 @@ def _run_execution_plan(
                 "--adapter-capabilities", json.dumps(config["adapter_capabilities"]),
                 "--external-observation-mode", str(config["observation_mode"]),
             ])
+            source_root = config.get("agent_source_root")
+            if isinstance(source_root, str):
+                command.extend(["--external-source-root", source_root])
         expected_source = expected_source_by_label.get(agent_label)
         if uses_external_command and isinstance(expected_source, str):
             command.extend(["--expected-agent-source-hash", expected_source])
@@ -468,7 +485,7 @@ def _index_evolution_report(
     if catalog_argument:
         catalog_path = Path(catalog_argument).resolve()
     elif project_id is not None:
-        catalog_path = REGRESSION / ".runtime" / "projects" / project_id / "evolution-catalog.json"
+        catalog_path = runtime_root() / "projects" / project_id / "evolution-catalog.json"
     else:
         catalog_path = output_dir.parent / "evolution-catalog.json"
 
@@ -524,11 +541,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", action="append", required=True,
                         help="benchmark manifest; repeat for multiple Cases")
-    parser.add_argument("--output-dir", default=str(REGRESSION / ".runtime" / "experiment"))
+    parser.add_argument("--output-dir", default=str(runtime_root() / "experiment"))
     parser.add_argument("--agents", default="baseline:react-agent-v1,candidate:react-agent-v2")
     parser.add_argument("--adapter", default="react-agent", help="registered Agent adapter ID")
     parser.add_argument("--external-command", help="JSON argv array used only with external-command")
     parser.add_argument("--adapter-capabilities", help="Evidence Capability JSON snapshot for an external-command Agent")
+    parser.add_argument("--external-observation-mode", choices=("sdk", "blackbox", "langgraph"), default="sdk")
     parser.add_argument("--external-arm-configs", help="platform-owned JSON configs keyed by Agent label")
     parser.add_argument("--replay-source", help="path to external external Agent source when using readonly-replay")
     parser.add_argument("--trials", type=int)
@@ -596,6 +614,10 @@ def _resolve_execution_config(
         parser.error("--external-arm-configs is only valid with --adapter external-command")
     if external_arm_configs is not None and external_command is not None:
         parser.error("--external-arm-configs cannot be combined with --external-command")
+    if external_arm_configs is not None and args.external_observation_mode != "sdk":
+        parser.error("--external-observation-mode cannot be combined with --external-arm-configs")
+    if args.adapter != "external-command" and args.external_observation_mode != "sdk":
+        parser.error("--external-observation-mode is only valid with --adapter external-command")
 
     adapter_capabilities: dict[str, object] | None = None
     if args.adapter_capabilities:
@@ -609,6 +631,10 @@ def _resolve_execution_config(
         if parsed_capabilities is None:
             parser.error("--adapter-capabilities must provide every AdapterCapabilities boolean field")
         adapter_capabilities = parsed_capabilities.as_dict()
+    if args.external_observation_mode == "langgraph":
+        if adapter_capabilities is not None and adapter_capabilities != LANGGRAPH_CAPABILITIES:
+            parser.error("langgraph observation mode uses platform-defined capabilities")
+        adapter_capabilities = LANGGRAPH_CAPABILITIES
     return agents, external_arm_configs, external_command, adapter_capabilities
 
 
@@ -650,28 +676,29 @@ def _freeze_or_restore_protocol(
     if not args.report_only and external_arm_configs is not None:
         for agent in agents:
             arm_config = external_arm_configs[agent["id"]]
-            if arm_config["observation_mode"] == "blackbox":
+            if arm_config["observation_mode"] != "sdk":
                 continue
             prompt_profiles.update(
                 describe_prompt_profiles(
                     arm_config["external_command"],
                     [agent],
                     manifest_documents,
+                    arm_config.get("agent_source_root") if isinstance(arm_config.get("agent_source_root"), str) else None,
                 )
             )
-    elif not args.report_only:
+    elif not args.report_only and args.external_observation_mode == "sdk":
         prompt_profiles = describe_prompt_profiles(external_command, agents, manifest_documents)
 
-    sdk_agent_count = len(agents)
+    prompt_profile_agent_count = len(agents) if args.external_observation_mode == "sdk" else 0
     if external_arm_configs is not None:
-        sdk_agent_count = sum(
+        prompt_profile_agent_count = sum(
             config["observation_mode"] == "sdk"
             for config in external_arm_configs.values()
         )
     if (
         not args.report_only
         and args.adapter == "external-command"
-        and len(prompt_profiles) != sdk_agent_count
+        and len(prompt_profiles) != prompt_profile_agent_count
     ):
         print(
             "PROTOCOL ERROR: external Agent must support --describe-protocol for every compared version.",

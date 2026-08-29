@@ -87,11 +87,12 @@ langgraph-integration:
 	PYTHONPATH=src:. $(PYTHON) scripts/run_experiment.py \
 	  --adapter external-command \
 	  --external-command '["$(CURDIR)/$(LANGGRAPH_PYTHON)", "$(CURDIR)/examples/langgraph_coding_agent.py"]' \
-	  --adapter-capabilities '{"schema_version":2,"trace":true,"hierarchical_trace":true,"model_usage":true,"tool_trace":true,"tool_semantics":true,"test_trace":false,"context_trace":false,"workflow_trace":true,"mcp_trace":false}' \
+	  --adapter-capabilities '{"schema_version":2,"trace":true,"hierarchical_trace":true,"model_usage":true,"tool_trace":true,"tool_semantics":false,"test_trace":false,"context_trace":false,"workflow_trace":true,"mcp_trace":false}' \
+	  --external-observation-mode langgraph \
 	  --agents baseline:langgraph-agent-v1,candidate:langgraph-agent-v2 \
 	  --trials 3 --schedule-seed 20260816 --unsafe-trusted-host \
 	  --comparison-intent duplicate_read_elision \
-	  --output-dir .runtime/langgraph-v1-v2-integration-v2 \
+	  --output-dir .runtime/langgraph-v1-v2-integration-v5 \
 	  --manifest benchmarks/smoke-case-design.yaml \
 	  --manifest benchmarks/normalize-case-design.yaml \
 	  --manifest benchmarks/parse-port-case.yaml

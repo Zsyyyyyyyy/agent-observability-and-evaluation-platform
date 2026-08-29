@@ -1,5 +1,6 @@
 import json
 import hashlib
+import os
 import subprocess
 import sys
 import unittest
@@ -63,7 +64,7 @@ class ExternalCommandAdapterTests(unittest.TestCase):
 
         self.assertEqual(environment["PATH"], "/usr/bin")
         self.assertEqual(environment["OPENAI_API_KEY"], "agent-key")
-        self.assertEqual(environment["PYTHONPATH"], str(worker.ROOT / "src"))
+        self.assertEqual(environment["PYTHONPATH"], f"{worker.ROOT / 'src'}{os.pathsep}/private/platform/imports")
         self.assertNotIn("UNRELATED_PLATFORM_SECRET", environment)
 
     def test_external_agent_runs_with_platform_owned_evidence(self):
@@ -221,6 +222,64 @@ class ExternalCommandAdapterTests(unittest.TestCase):
         snapshot = snapshot_trial_behavior(result)
         self.assertEqual(snapshot["evidence_availability"]["model_calls"], "unsupported")
         self.assertIsNone(snapshot["model_calls"])
+
+    def test_langgraph_mode_accepts_callback_trace_without_agent_output(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "langgraph_agent.py"
+            agent.write_text(
+                "import os\nfrom pathlib import Path\n"
+                "from regression_lab_observer.langgraph import LangGraphObserver\n"
+                "with LangGraphObserver.from_environment() as observation:\n"
+                "  callback=observation.callback\n"
+                "  callback.on_chain_start({}, {}, run_id='node', metadata={'langgraph_node':'Coder'})\n"
+                "  callback.on_chat_model_start({'kwargs':{'model_name':'fixture-model'}}, [], run_id='model', parent_run_id='node')\n"
+                "  callback.on_llm_end({'llm_output':{'token_usage':{'prompt_tokens':2,'completion_tokens':1}}}, run_id='model')\n"
+                "  callback.on_tool_start({'name':'edit_file'}, '', run_id='tool', parent_run_id='node')\n"
+                "  Path(os.environ['REGRESSION_WORKTREE'], 'calculator.py').write_text(\"def calculate(value):\\n    return 0 if value == '' else int(value) + 1\\n\", encoding='utf-8')\n"
+                "  callback.on_tool_end('', run_id='tool')\n"
+                "  callback.on_chain_end({}, run_id='node')\n",
+                encoding="utf-8",
+            )
+            result = run_trial({
+                "trial_id": "langgraph_trial_001", "case_id": "calculator_empty", "agent_version": "langgraph-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"),
+                "test_command": f"{sys.executable} -m unittest test_calculator.py", "sandbox": None,
+                "allowed_paths": ["calculator.py", "__pycache__/**"], "forbidden_paths": [], "allowed_tools": ["edit_file"], "denied_tools": [], "budget": {},
+                "observation_mode": "langgraph", "adapter_capabilities": {"schema_version": 2, "trace": True, "hierarchical_trace": True, "model_usage": True, "tool_trace": True, "tool_semantics": False, "test_trace": False, "context_trace": False, "workflow_trace": True, "mcp_trace": False},
+            })
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["trace_validation"]["valid"])
+        self.assertEqual(result["agent_output"]["availability"], "unavailable")
+        self.assertEqual(result["model_usage"]["total_tokens"], 3)
+        self.assertEqual(result["evidence_provenance"]["trace"], "framework_observed")
+        self.assertTrue(result["framework_observation"]["complete"])
+
+    def test_langgraph_mode_fails_closed_when_callback_completion_marker_is_missing(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "unobserved_langgraph_agent.py"
+            agent.write_text(
+                "import os\nfrom pathlib import Path\n"
+                "Path(os.environ['REGRESSION_WORKTREE'], 'calculator.py').write_text(\"def calculate(value):\\n    return 0 if value == '' else int(value) + 1\\n\", encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            result = run_trial({
+                "trial_id": "langgraph_trial_missing", "case_id": "calculator_empty", "agent_version": "langgraph-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"),
+                "test_command": f"{sys.executable} -m unittest test_calculator.py", "sandbox": None,
+                "allowed_paths": ["calculator.py", "__pycache__/**"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
+                "observation_mode": "langgraph", "adapter_capabilities": {"schema_version": 2, "trace": True, "hierarchical_trace": True, "model_usage": True, "tool_trace": True, "tool_semantics": False, "test_trace": False, "context_trace": False, "workflow_trace": True, "mcp_trace": False},
+            })
+
+        self.assertEqual(result["status"], "trace_incomplete")
+        self.assertFalse(result["framework_observation"]["complete"])
+        self.assertIn("status_missing", result["framework_observation"]["errors"])
 
     def test_blackbox_nonzero_exit_closes_platform_trace(self):
         with TemporaryDirectory() as directory:

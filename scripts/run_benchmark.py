@@ -31,9 +31,10 @@ from regression_lab.sandbox import DockerSandbox
 from regression_lab.store import RunStore
 from regression_lab.artifacts import write_json_atomically
 from regression_lab.protocol import agent_source_snapshot
+from regression_lab.paths import asset_root, python_import_root, runtime_root
 
 
-REGRESSION = Path(__file__).resolve().parents[1]
+REGRESSION = asset_root()
 
 
 def git(*args: str, cwd: Path) -> None:
@@ -44,6 +45,7 @@ def _job_fingerprint(
     job: dict[str, object], *, adapter_id: str, agent_version: str, use_docker: bool, replay_bash: bool, external_command: list[str] | None = None,
     expected_agent_source_hash: str | None = None, adapter_capabilities: dict[str, object] | None = None,
     external_observation_mode: str = "sdk",
+    external_source_root: str | None = None,
 ) -> str:
     payload = {
         "job": job,
@@ -55,16 +57,17 @@ def _job_fingerprint(
         "expected_agent_source_hash": expected_agent_source_hash,
         "adapter_capabilities": adapter_capabilities,
         "external_observation_mode": external_observation_mode,
-        "external_command_source_hash": _external_command_source_hash(external_command),
+        "external_source_root": external_source_root,
+        "external_command_source_hash": _external_command_source_hash(external_command, external_source_root),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _external_command_source_hash(command: list[str] | None) -> str | None:
+def _external_command_source_hash(command: list[str] | None, source_root: str | None = None) -> str | None:
     """优先计算 Agent 工作树哈希，否则计算入口文件哈希。"""
 
-    return agent_source_snapshot(command or [])["agent_source_hash"]
+    return agent_source_snapshot(command or [], source_root)["agent_source_hash"]
 
 
 def _owned_job_dir(job_dir: Path, job_id: str, fingerprint: str) -> bool:
@@ -215,6 +218,8 @@ def _build_trial_spec(
     }
     if external_command is not None:
         spec["external_command"] = external_command
+        if args.external_source_root:
+            spec["agent_source_root"] = args.external_source_root
     if replay_source is not None:
         spec["replay_source"] = str(replay_source)
     return spec
@@ -277,7 +282,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
-    parser.add_argument("--output-dir", default=str(REGRESSION / ".runtime" / "benchmark"))
+    parser.add_argument("--output-dir", default=str(runtime_root() / "benchmark"))
     parser.add_argument("--project-root", default=str(REGRESSION))
     parser.add_argument("--trials", type=int)
     parser.add_argument("--trial-index", type=int, action="append",
@@ -297,9 +302,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-version", help="Agent implementation version; defaults to the adapter version")
     parser.add_argument("--agent-profile", help="optional Agent operating-profile label recorded in the Trial")
     parser.add_argument("--external-command", help="JSON argv array for external-command, e.g. '[\"python3\", \"/path/agent.py\"]'")
+    parser.add_argument("--external-source-root", help="platform-owned Agent source root used for module imports and identity")
     parser.add_argument("--adapter-capabilities", help="Evidence Capability JSON snapshot for an external-command Agent")
     parser.add_argument(
-        "--external-observation-mode", choices=("sdk", "blackbox"), default="sdk",
+        "--external-observation-mode", choices=("sdk", "blackbox", "langgraph"), default="sdk",
         help="external-command evidence mode; sdk remains the legacy default",
     )
     parser.add_argument("--expected-agent-source-hash", help="frozen external Agent entry-point hash from the Experiment Protocol")
@@ -350,8 +356,17 @@ def _resolve_adapter_config(
         parser.error("--external-command is only valid with --adapter external-command")
     if adapter.adapter_id != "external-command" and args.external_observation_mode != "sdk":
         parser.error("--external-observation-mode is only valid with --adapter external-command")
+    if args.external_source_root:
+        source_root = Path(args.external_source_root)
+        if adapter.adapter_id != "external-command" or not source_root.is_absolute() or not source_root.is_dir():
+            parser.error("--external-source-root must be an existing absolute directory for external-command")
 
     adapter_capabilities = adapter.evidence_capabilities
+    langgraph_capabilities = AdapterCapabilities(
+        trace=True, hierarchical_trace=True, model_usage=True, tool_trace=True,
+        tool_semantics=False, test_trace=False, context_trace=False,
+        workflow_trace=True, mcp_trace=False,
+    )
     if args.adapter_capabilities:
         if adapter.adapter_id != "external-command":
             parser.error("--adapter-capabilities is only valid with --adapter external-command")
@@ -363,6 +378,12 @@ def _resolve_adapter_config(
         if parsed_capabilities is None:
             parser.error("--adapter-capabilities must provide every AdapterCapabilities boolean field")
         adapter_capabilities = parsed_capabilities
+    if args.external_observation_mode == "langgraph":
+        if adapter.adapter_id != "external-command":
+            parser.error("--external-observation-mode is only valid with --adapter external-command")
+        if args.adapter_capabilities and adapter_capabilities != langgraph_capabilities:
+            parser.error("langgraph observation mode uses platform-defined capabilities")
+        adapter_capabilities = langgraph_capabilities
 
     replay_source: Path | None = None
     if adapter.adapter_id == "readonly-replay" and not args.dry_run:
@@ -425,6 +446,7 @@ def main() -> int:
             expected_agent_source_hash=args.expected_agent_source_hash,
             adapter_capabilities=adapter_capabilities.as_dict(),
             external_observation_mode=args.external_observation_mode,
+            external_source_root=args.external_source_root,
         )
         try:
             job_dir = safe_child_path(output_dir, job["job_id"], "job_id")
@@ -497,7 +519,7 @@ def main() -> int:
         completed = run_with_deadline(
             [sys.executable, str(adapter.worker_path), "--input", str(input_path)],
             cwd=REGRESSION,
-            env={**os.environ, "PYTHONPATH": str(REGRESSION / "src")},
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(python_import_root()), os.environ.get("PYTHONPATH", "")]))},
             # 外部 Worker 负责 Trial 时限并清理 Agent 进程组；父进程额外保留少量时间，
             # 使 Worker 能在硬停止前持久化终态 Attempt 证据。
             timeout_seconds=timeout_seconds + 5,
@@ -514,7 +536,7 @@ def main() -> int:
             result["protocol_fingerprint"] = args.protocol_fingerprint
         if external_command is not None:
             # Worker 会在运行 Agent 前独立测量源码；即使 Worker 提前崩溃，Runner 也保留一份值。
-            result.setdefault("agent_source_hash", _external_command_source_hash(external_command))
+            result.setdefault("agent_source_hash", _external_command_source_hash(external_command, args.external_source_root))
             result["expected_agent_source_hash"] = args.expected_agent_source_hash
             result["agent_source_hash_matches_protocol"] = (
                 isinstance(args.expected_agent_source_hash, str)

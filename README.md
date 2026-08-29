@@ -1,4 +1,4 @@
-# Regression Lab v0.2
+# Regression Lab v1.2
 
 **Framework-neutral Agent regression evaluation and observability platform for reproducible version comparison.**
 
@@ -68,9 +68,39 @@ Regression Lab 不负责规划、记忆、工具编排或替代 Agent Runtime。
 
 这两组实验同时证明：平台既能把效率改善追溯到行为差异，也能在正确率不变时拦截成本退化。详见 [V3→V4.1 正向报告](docs/EXPERIMENT_REPORT_EXTERNAL_V3_V4_1_BENCHMARK_V2.md) 与 [V3→V3-negative 负向对照](docs/EXPERIMENT_REPORT_EXTERNAL_V3_NEGATIVE_CONTROL_BENCHMARK_V2.md)。
 
-## 五分钟看懂项目
+## 一键启动
 
-要求：Python 3.11、Git、Node.js；Docker Desktop 只用于容器隔离验收。核心验证和离线 Demo 不调用模型。
+普通使用者不需要克隆仓库、创建虚拟环境或编写 YAML。macOS/Linux 上安装 [uv](https://docs.astral.sh/uv/) 后直接运行：
+
+```bash
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0" regression-lab start
+```
+
+命令会启动并打开本机 Studio。它只监听 `127.0.0.1`；运行记录和 Studio 自动生成的 AgentSpec 默认保存到 `~/.regression-lab/`，不会写入安装目录。第一次只想确认环境可运行时：
+
+```bash
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0" regression-lab doctor
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0" regression-lab demo
+```
+
+`demo` 是完全离线、只读的公开演示，不调用模型、不执行外部 Agent。需要长期安装则使用：
+
+```bash
+uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0"
+regression-lab start
+```
+
+Studio 中选择 Quick setup，填写两个 Agent 的 Python 路径与入口、选择 Case，即可开始实验。Docker 是默认隔离方式；未安装 Docker 时，必须在页面明确确认“可信主机”才能运行本地 Agent。
+
+### 比较同一个 Agent 仓库的两个状态
+
+真实开发通常只有一个 Agent 仓库。Quick setup 默认选择 **Same Git repository**：填写仓库根目录、Baseline 的 commit/tag，并选择 Candidate 为另一个 commit/tag 或当前未提交工作区。平台会在系统临时目录创建两个源码快照后再运行实验，不会对你的仓库执行 checkout、stash、commit 或写入。
+
+Candidate 工作区中的 tracked 修改和未跟踪文件会进入快照；被 `.gitignore` 排除的文件（例如常见的 `.env`、`.venv`）不会进入。依赖发生变化时，请分别填写两个已准备好的 Python interpreter；平台不会自动执行 `pip install` 或 `uv sync`。
+
+## 五分钟看懂项目（贡献者）
+
+源码贡献要求：Python 3.11、Git、Node.js；Docker Desktop 只用于容器隔离验收。核心验证和离线 Demo 不调用模型。
 
 ```bash
 cd <repository-root>
@@ -182,7 +212,7 @@ Smoke 成功后会打印 Runtime；可按输出中的命令启动 Console。Blac
 
 ## 接入一个外部 Agent
 
-平台以 `shell=false` 执行显式 JSON argv。Black-box Agent 只需接收 `--workspace {workspace}` 与 `--task {task}`；若希望获得模型、工具和 workflow 证据，则使用 SDK 模式并由 Agent 输出 Trace。平台始终独立采集测试、Diff 和评分结论。
+平台以 `shell=false` 执行显式 JSON argv。Black-box Agent 只需接收 `--workspace {workspace}` 与 `--task {task}`；LangGraph Agent 只需在 `invoke/stream` 入口注入一次 Callback；自研 Runtime 才使用 Native SDK。平台始终独立采集测试、Diff 和评分结论，并在 Artifact 中标记证据来源。
 
 ```python
 from regression_lab.sdk import AgentObserver
@@ -211,9 +241,9 @@ PYTHONPATH=src:. python3.11 scripts/run_benchmark.py \
 
 要评测自己的项目，请准备基线 Fixture、Case Manifest 和两个 Agent 版本，按 [Using Your Agent](docs/USING_YOUR_AGENT.md) 执行。平台会为每个 Attempt 复制 Fixture、初始化独立临时 Git 仓库并在其中运行 Trial，不会修改用户原始项目。主执行链没有调用 `git worktree add`，面试或文档中不应把它描述成 Git Worktree 隔离。
 
-## v0.2 工程边界
+## v1.2 工程边界
 
-当前版本为 **v0.2.0**，定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。已稳定实现：
+当前版本为 **v1.2.0**，定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。已稳定实现：
 
 - 无 YAML 的 Studio 双版本实验；
 - Trace 树、Comparison、Failure Attribution 和 Gate；

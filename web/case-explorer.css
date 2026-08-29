@@ -551,10 +551,11 @@
 .trace-view-tabs button { border: 0; padding: 4px 7px; background: transparent; color: var(--muted); font: 9px var(--mono); letter-spacing: .05em; }
 .trace-view-tabs button[aria-selected="true"] { background: var(--ink); color: var(--sheet); }
 .trace-tree { padding-left: 0; list-style: none; }
-.trace-tree-event { position: relative; display: grid; grid-template-columns: 18px auto minmax(0, 1fr); margin-left: calc(var(--trace-depth) * 15px); }
+/* 通用列表项使用 flex；Tree 必须显式覆盖它，否则嵌套子树会与父节点横向并排。 */
+#trace-list.trace-tree .trace-tree-event { position: relative; display: grid; grid-template-columns: 18px auto minmax(0, 1fr); align-items: start; margin-left: calc(var(--trace-depth) * 15px); padding: 10px 12px; column-gap: 2px; }
 .trace-tree-toggle,.trace-tree-stem { width: 18px; height: 18px; margin-top: 1px; border: 0; background: transparent; color: var(--muted); font: 14px/14px var(--mono); }
 .trace-tree-toggle { cursor: pointer; }.trace-tree-toggle[aria-expanded="false"] { transform: rotate(-90deg); }
-.trace-tree-children { grid-column: 1 / -1; margin: 0; padding: 0; list-style: none; }
+.trace-tree-children { grid-column: 1 / -1; width: 100%; margin: 0; padding: 0; list-style: none; }
 .trace-tree-event.collapsed > .trace-tree-children { display: none; }
 .trace-tree-event::before { position: absolute; left: 8px; top: -5px; bottom: -5px; width: 1px; background: var(--line); content: ""; }
 .trace-tree-event:first-child::before { top: 10px; }.trace-tree-event:last-child::before { bottom: auto; height: 15px; }

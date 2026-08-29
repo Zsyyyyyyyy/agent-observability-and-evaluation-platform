@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
+import time
 import webbrowser
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -18,6 +22,7 @@ from regression_lab.agent_spec import AgentSpecError, load_agent_spec
 from regression_lab.gate import evaluate_gate
 from regression_lab.integrity import verify_experiment_runtime
 from regression_lab.protocol import write_json_atomically
+from regression_lab.paths import asset_path, asset_root, runtime_root
 
 
 def _validate_agent(path: str) -> int:
@@ -33,7 +38,7 @@ def _validate_agent(path: str) -> int:
     print(f"  Launch: {' '.join(spec.command)}")
     print(f"  Observation: {spec.observation_mode}")
     print("  Adapter: external-command")
-    if spec.observation_mode == "sdk":
+    if spec.observation_mode in {"sdk", "langgraph"}:
         enabled = [name for name, value in config["adapter_capabilities"].items() if name != "schema_version" and value]
         print("  Evidence capability: " + ", ".join(enabled))
     print("No Agent process, model call, Trial, or Artifact was created.")
@@ -77,6 +82,8 @@ def _print_smoke(runtime: Path, result: dict[str, object] | None) -> None:
     capabilities = result.get("adapter_capabilities") if isinstance(result.get("adapter_capabilities"), dict) else {}
     if result.get("observation_mode") == "blackbox":
         print("✓ process lifecycle")
+    elif result.get("observation_mode") == "langgraph":
+        print("✓ framework callback Trace")
     for label, capability in (("model usage", "model_usage"), ("tool trace", "tool_trace"), ("workflow trace", "workflow_trace")):
         value = capabilities.get(capability)
         print(f"{'✓' if value is True else '—'} {label}: {'available capability' if value is True else 'unsupported'}")
@@ -107,7 +114,21 @@ def _console_port(port: int | None) -> int:
     raise ValueError(f"Console port {port} is already in use")
 
 
-def _serve_console(runtime: Path, port: int | None) -> int:
+def _studio_port(port: int | None) -> int:
+    candidates = [port] if port is not None else [8764, *range(8780, 8790)]
+    for candidate in candidates:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                listener.bind(("127.0.0.1", candidate))
+        except OSError:
+            continue
+        return candidate
+    if port is None:
+        raise ValueError("no free Studio port found in 8764 or 8780-8789")
+    raise ValueError(f"Studio port {port} is already in use")
+
+
+def _serve_console(runtime: Path, port: int | None, *, open_browser: bool = True) -> int:
     try:
         selected_port = _console_port(port)
     except ValueError as exc:
@@ -115,17 +136,19 @@ def _serve_console(runtime: Path, port: int | None) -> int:
         return 2
     url = f"http://127.0.0.1:{selected_port}"
     print(f"Observability Console: {url}")
-    try:
-        opened = webbrowser.open(url)
-    except Exception:  # 浏览器只是便利入口，不能改变本地报告的完成状态。
-        opened = False
-    if not opened:
+    opened = False
+    if open_browser:
+        try:
+            opened = webbrowser.open(url)
+        except Exception:  # 浏览器只是便利入口，不能改变本地报告的完成状态。
+            pass
+    if open_browser and not opened:
         print(f"Open this URL in a browser: {url}")
     try:
         return subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parent / "serve_dashboard.py"),
+            [sys.executable, "-m", "scripts.serve_dashboard",
              "--runtime", str(runtime), "--port", str(selected_port)],
-            cwd=Path(__file__).resolve().parents[1], check=False,
+            cwd=asset_root(), check=False,
         ).returncode
     except KeyboardInterrupt:
         # Console 是前台只读进程；Ctrl+C 应安静地结束它，而非泄漏调用栈。
@@ -139,13 +162,13 @@ def _smoke_agent(path: str, benchmark: str | None, unsafe_trusted_host: bool,
     except AgentSpecError as exc:
         print("Agent spec validation failed:\n" + str(exc), file=sys.stderr)
         return 2
-    root = Path(__file__).resolve().parents[1]
-    manifest = Path(benchmark).resolve() if benchmark else root / "benchmarks" / "smoke-case-design.yaml"
+    root = asset_root()
+    manifest = Path(benchmark).resolve() if benchmark else asset_path("benchmarks", "smoke-case-design.yaml")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    runtime = root / ".runtime" / "agent-smoke" / f"{spec.agent_id}-{spec.version}-{stamp}"
+    runtime = runtime_root() / "agent-smoke" / f"{spec.agent_id}-{spec.version}-{stamp}"
     config = spec.as_external_command_config()
     command = [
-        sys.executable, str(root / "scripts" / "run_benchmark.py"),
+        sys.executable, "-m", "scripts.run_benchmark",
         "--adapter", "external-command", "--agent-version", spec.version,
         "--external-command", json.dumps(config["external_command"]),
         "--adapter-capabilities", json.dumps(config["adapter_capabilities"]),
@@ -180,7 +203,7 @@ def _validate_experiment_specs(baseline_path: str, candidate_path: str):
     if baseline.version == candidate.version:
         raise AgentSpecError("baseline.agent.version and candidate.agent.version must be different")
     if baseline.observation_mode != candidate.observation_mode:
-        raise AgentSpecError("baseline and candidate observation.mode must match (blackbox vs sdk is not comparable)")
+        raise AgentSpecError("baseline and candidate observation.mode must match (blackbox, sdk, and langgraph evidence is not comparable)")
     if baseline.project_id is None or candidate.project_id is None:
         raise AgentSpecError("baseline and candidate project_id are required for a version Experiment")
     if baseline.project_id != candidate.project_id:
@@ -238,16 +261,16 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
     except AgentSpecError as exc:
         print("Experiment configuration failed:\n" + str(exc), file=sys.stderr)
         return 2
-    root = Path(__file__).resolve().parents[1]
+    root = asset_root()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     assert baseline.project_id is not None
-    runtime = root / ".runtime" / "projects" / baseline.project_id / "experiments" / f"{baseline.agent_id}-{baseline.version}-vs-{candidate.version}-{stamp}"
+    runtime = runtime_root() / "projects" / baseline.project_id / "experiments" / f"{baseline.agent_id}-{baseline.version}-vs-{candidate.version}-{stamp}"
     arm_configs = {
         "baseline": {**baseline.as_external_command_config(), "agent_spec_snapshot": baseline.snapshot()},
         "candidate": {**candidate.as_external_command_config(), "agent_spec_snapshot": candidate.snapshot()},
     }
     command = [
-        sys.executable, str(root / "scripts" / "run_experiment.py"),
+        sys.executable, "-m", "scripts.run_experiment",
         "--adapter", "external-command", "--agents", f"baseline:{baseline.version},candidate:{candidate.version}",
         "--external-arm-configs", json.dumps(arm_configs), "--trials", str(trials),
         "--output-dir", str(runtime), "--project-id", baseline.project_id,
@@ -281,9 +304,89 @@ def _verify_experiment(runtime: str) -> int:
     return 0 if report["valid"] else 1
 
 
+def _start_studio(port: int | None, *, no_open: bool, data_dir: str | None) -> int:
+    try:
+        selected_port = _studio_port(port)
+    except ValueError as exc:
+        print(f"Studio setup error: {exc}", file=sys.stderr)
+        return 2
+    url = f"http://127.0.0.1:{selected_port}"
+    environment = dict(os.environ)
+    if data_dir:
+        environment["REGRESSION_LAB_HOME"] = str(Path(data_dir).expanduser().resolve())
+    print(f"Run Studio: {url}")
+    process = subprocess.Popen(
+        [sys.executable, "-m", "scripts.serve_studio", "--port", str(selected_port)],
+        cwd=asset_root(), env=environment,
+    )
+    try:
+        # 浏览器必须等服务已监听再打开，否则首次使用会看到短暂的连接拒绝页面。
+        for _ in range(20):
+            if process.poll() is not None:
+                return process.returncode or 1
+            try:
+                with socket.create_connection(("127.0.0.1", selected_port), timeout=0.1):
+                    break
+            except OSError:
+                time.sleep(0.05)
+        if not no_open:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        return process.wait()
+    except KeyboardInterrupt:
+        process.terminate()
+        process.wait()
+        return 0
+
+
+def _open_demo(name: str, port: int | None, *, no_open: bool) -> int:
+    demo = asset_path("demo", name)
+    if not demo.is_dir():
+        print(f"Demo setup error: unknown bundled demo {name!r}", file=sys.stderr)
+        return 2
+    try:
+        selected_port = _console_port(port)
+    except ValueError as exc:
+        print(f"Console setup error: {exc}", file=sys.stderr)
+        return 2
+    return _serve_console(demo, selected_port, open_browser=not no_open)
+
+
+def _doctor() -> int:
+    checks = [
+        ("Python 3.11+", sys.version_info >= (3, 11)),
+        ("bundled Studio assets", asset_path("web", "studio.html").is_file()),
+        ("bundled Benchmark catalog", asset_path("benchmarks").is_dir()),
+        ("bundled offline Demo", asset_path("demo", "instrumented-v3-v4-1").is_dir()),
+    ]
+    for label, passed in checks:
+        print(f"{'✓' if passed else '✗'} {label}")
+    print(f"— Docker: {'available' if shutil.which('docker') else 'not installed (Studio can use trusted host)'}")
+    return 0 if all(passed for _, passed in checks) else 2
+
+
+def _installed_version() -> str:
+    try:
+        return version("regression-lab")
+    except PackageNotFoundError:
+        return "development"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="regression-lab")
+    parser.add_argument("--version", action="version", version=f"regression-lab {_installed_version()}")
     commands = parser.add_subparsers(dest="command", required=True)
+    start = commands.add_parser("start", help="open the local Studio")
+    start.add_argument("--port", type=int, help="Studio port; defaults to 8764 then 8780-8789")
+    start.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
+    start.add_argument("--data-dir", help="directory for Studio-generated AgentSpecs and local runtimes")
+    demo = commands.add_parser("demo", help="open a bundled offline, read-only Console demo")
+    demo.add_argument("--name", default="instrumented-v3-v4-1", choices=("instrumented-v3-v4-1", "standalone-langgraph-v1-v2"))
+    demo.add_argument("--port", type=int, help="Console port; defaults to the first free port from 8765")
+    demo.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
+    commands.add_parser("doctor", help="check whether this local installation can start Studio")
     agent = commands.add_parser("agent", help="validate an AgentSpec before running a Trial")
     agent_commands = agent.add_subparsers(dest="agent_command", required=True)
     validate = agent_commands.add_parser("validate", help="perform static AgentSpec validation only")
@@ -312,6 +415,12 @@ def main() -> int:
     console.add_argument("--runtime", required=True, help="Experiment or Trial runtime directory")
     console.add_argument("--port", type=int, help="Console port; defaults to the first free port from 8765")
     args = parser.parse_args()
+    if args.command == "start":
+        return _start_studio(args.port, no_open=args.no_open, data_dir=args.data_dir)
+    if args.command == "demo":
+        return _open_demo(args.name, args.port, no_open=args.no_open)
+    if args.command == "doctor":
+        return _doctor()
     if args.command == "agent" and args.agent_command == "validate":
         return _validate_agent(args.spec)
     if args.command == "agent" and args.agent_command == "smoke":

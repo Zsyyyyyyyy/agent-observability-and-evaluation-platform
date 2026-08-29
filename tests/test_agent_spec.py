@@ -54,6 +54,18 @@ class AgentSpecTests(unittest.TestCase):
         })
         self.assertEqual(spec.as_external_command_config()["adapter"], "external-command")
 
+    def test_langgraph_derives_framework_capabilities_without_user_claims(self):
+        with TemporaryDirectory() as directory:
+            value = self._base([sys.executable])
+            value["observation"] = {"mode": "langgraph"}
+            spec = load_agent_spec(self._write(Path(directory), value))
+
+        self.assertEqual(spec.capabilities.as_dict(), {
+            "schema_version": 2, "trace": True, "hierarchical_trace": True,
+            "model_usage": True, "tool_trace": True, "tool_semantics": False,
+            "test_trace": False, "context_trace": False, "workflow_trace": True, "mcp_trace": False,
+        })
+
     def test_rejects_shell_command_unknown_templates_and_internal_fields(self):
         with TemporaryDirectory() as directory:
             value = self._base([sys.executable, "{trace_path}"])
@@ -127,6 +139,21 @@ class AgentSpecTests(unittest.TestCase):
         self.assertEqual(before["source_scope"], "git_worktree")
         self.assertEqual(before["entrypoint_hash"], after["entrypoint_hash"])
         self.assertNotEqual(before["agent_source_hash"], after["agent_source_hash"])
+
+    def test_source_root_resolves_agent_source_template_without_hashing_temp_path(self):
+        with TemporaryDirectory() as directory, TemporaryDirectory() as spec_directory:
+            root = Path(directory)
+            source = root / "agent.py"
+            source.write_text("print('agent')\n", encoding="utf-8")
+            for command in (("git", "init"), ("git", "add", "."), ("git", "commit", "-m", "initial")):
+                subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
+            value = self._base([sys.executable, "{agent_source}/agent.py", "--workspace", "{workspace}", "--task", "{task}"])
+            value["runtime"]["source_root"] = str(root)
+            snapshot = load_agent_spec(self._write(Path(spec_directory), value)).snapshot()
+
+        self.assertEqual(snapshot["source_scope"], "git_worktree")
+        self.assertFalse(snapshot["source_dirty"])
+        self.assertIn("{agent_source}/agent.py", snapshot["normalized_command"])
 
     def test_snapshot_hashes_python_module_worktree_not_its_interpreter(self):
         with TemporaryDirectory() as directory:

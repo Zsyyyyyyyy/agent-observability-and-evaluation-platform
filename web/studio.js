@@ -8,7 +8,7 @@ const runLog = document.querySelector("#run-log");
 const savedSetupStatus = document.querySelector("#saved-setup-status");
 const restoreSetupButton = document.querySelector("#restore-setup");
 const forgetSetupButton = document.querySelector("#forget-setup");
-const LOCAL_SETUP_KEY = "regression-lab.studio.local-setup.v1";
+const LOCAL_SETUP_KEY = "regression-lab.studio.local-setup.v2";
 let preflightValid = false;
 
 function values() {
@@ -18,13 +18,14 @@ function values() {
     launch_mode: launchMode, baseline: data.get("baseline")?.trim(), candidate: data.get("candidate")?.trim(),
     project_id: data.get("project_id")?.trim(), agent_id: data.get("agent_id")?.trim(),
     baseline_version: data.get("baseline_version")?.trim(), candidate_version: data.get("candidate_version")?.trim(),
+    source_mode: data.get("source_mode") || "two_entries", repository_path: data.get("repository_path")?.trim(), baseline_ref: data.get("baseline_ref")?.trim(), candidate_source: data.get("candidate_source") || "working_tree", candidate_ref: data.get("candidate_ref")?.trim(),
     baseline_python_executable: data.get("baseline_python_executable")?.trim(), candidate_python_executable: data.get("candidate_python_executable")?.trim(), launch_target_kind: data.get("launch_target_kind"), baseline_entrypoint: data.get("baseline_entrypoint")?.trim(), candidate_entrypoint: data.get("candidate_entrypoint")?.trim(), observation_mode: data.get("observation_mode"),
     benchmarks: [...data.getAll("benchmarks")], trials: Number(data.get("trials")), execution_mode: data.get("execution_mode"), trusted_host_confirmed: data.get("trusted_host_confirmed") === "on",
   };
 }
 function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value); return node.innerHTML; }
 function readSavedSetup() {
-  try { return JSON.parse(localStorage.getItem(LOCAL_SETUP_KEY)); }
+  try { return JSON.parse(localStorage.getItem(LOCAL_SETUP_KEY) || localStorage.getItem("regression-lab.studio.local-setup.v1")); }
   catch { return null; }
 }
 function updateSavedSetupStatus(message) {
@@ -36,14 +37,15 @@ function applySavedSetup(saved) {
   if (!saved || typeof saved !== "object") return;
   const setupMode = document.querySelector(`input[name=setup_mode][value="${CSS.escape(saved.launch_mode || "quick")}"]`);
   if (setupMode) setupMode.checked = true;
-  const simpleFields = ["baseline", "candidate", "project_id", "agent_id", "baseline_version", "candidate_version", "baseline_python_executable", "candidate_python_executable", "launch_target_kind", "baseline_entrypoint", "candidate_entrypoint", "observation_mode", "trials"];
+  if (saved.source_mode === undefined) form.elements.namedItem("source_mode").value = "two_entries";
+  const simpleFields = ["baseline", "candidate", "project_id", "agent_id", "source_mode", "repository_path", "baseline_ref", "candidate_source", "candidate_ref", "baseline_version", "candidate_version", "baseline_python_executable", "candidate_python_executable", "launch_target_kind", "baseline_entrypoint", "candidate_entrypoint", "observation_mode", "trials"];
   simpleFields.forEach(name => { const control = form.elements.namedItem(name); if (control && saved[name] !== undefined) control.value = saved[name]; });
   const executionMode = document.querySelector(`input[name=execution_mode][value="${CSS.escape(saved.execution_mode || "docker")}"]`);
   if (executionMode) executionMode.checked = true;
   const selectedBenchmarks = new Set(Array.isArray(saved.benchmarks) ? saved.benchmarks : []);
   document.querySelectorAll("input[name=benchmarks]").forEach(input => { input.checked = selectedBenchmarks.has(input.value); });
   form.elements.namedItem("trusted_host_confirmed").checked = false;
-  setSetupMode(); syncExecutionMode(); preflightValid = false; launchButton.disabled = true;
+  setSetupMode(); syncSourceMode(); syncExecutionMode(); preflightValid = false; launchButton.disabled = true;
 }
 function saveLocalSetup() {
   const setup = values();
@@ -81,7 +83,28 @@ document.querySelector("#preflight-button").addEventListener("click", event => {
 form.addEventListener("change", () => { preflightValid = false; launchButton.disabled = true; });
 form.addEventListener("submit", event => { event.preventDefault(); validate(); });
 function syncExecutionMode() { document.querySelector("#trusted-confirmation").hidden = document.querySelector("input[name=execution_mode]:checked").value !== "trusted_host"; }
+function syncObservationMode() {
+  const mode = form.elements.namedItem("observation_mode").value;
+  const note = document.querySelector("#observation-note");
+  note.innerHTML = mode === "langgraph"
+    ? "只需在 <code>graph.invoke()</code> 或 <code>graph.stream()</code> 入口注入一次 Callback。平台不会要求 Agent Output 文件，也不会记录 Prompt 或工具参数。"
+    : mode === "sdk"
+      ? "Native SDK 适合自研 Runtime：Agent 负责写入模型与工具 Span，平台独立负责测试、Diff、评分和 Gate。"
+      : "Black-box 不修改 Agent：平台仅采集进程、测试与 Git Evidence；模型和工具指标会明确显示为 N/A。";
+}
+function syncSourceMode() {
+  const gitMode = form.elements.namedItem("source_mode").value === "git_repository";
+  const module = form.elements.namedItem("launch_target_kind").value === "module";
+  document.querySelector("#git-source-fields").hidden = !gitMode;
+  document.querySelector("#candidate-ref-field").hidden = !gitMode || form.elements.namedItem("candidate_source").value !== "git_ref";
+  const quick = document.querySelector("input[name=setup_mode]:checked").value === "quick";
+  document.querySelectorAll("input[name=repository_path], input[name=baseline_ref], select[name=candidate_source], input[name=candidate_ref]").forEach(input => { input.disabled = !gitMode || !quick; });
+  document.querySelectorAll("input[name$=entrypoint]").forEach(input => { input.placeholder = module ? "my_agent" : gitMode ? "path/to/agent.py" : "/absolute/path/to/agent.py"; });
+}
 document.querySelectorAll("input[name=execution_mode]").forEach(input => input.addEventListener("change", syncExecutionMode));
+form.elements.namedItem("observation_mode").addEventListener("change", syncObservationMode);
+form.elements.namedItem("source_mode").addEventListener("change", syncSourceMode);
+form.elements.namedItem("candidate_source").addEventListener("change", syncSourceMode);
 function setSetupMode() {
   const quick = document.querySelector("input[name=setup_mode]:checked").value === "quick";
   document.querySelector("#quick-setup").hidden = !quick;
@@ -94,6 +117,7 @@ document.querySelector("select[name=launch_target_kind]").addEventListener("chan
   const module = event.target.value === "module";
   document.querySelectorAll(".target-label").forEach(label => { label.textContent = module ? "module name" : "entry file"; });
   document.querySelectorAll("input[name$=entrypoint]").forEach(input => { input.placeholder = module ? "standalone_langgraph_agent" : "/absolute/path/to/agent.py"; });
+  syncSourceMode();
 });
 launchButton.addEventListener("click", async () => { const result = await request("/api/run", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(values())}); if (result.errors) return renderPreflight(result); renderRun(result); refreshRun(); });
 document.querySelector("#save-setup").addEventListener("click", saveLocalSetup);
@@ -102,5 +126,7 @@ forgetSetupButton.addEventListener("click", forgetLocalSetup);
 request("/api/catalog").then(catalog => { document.querySelector("#case-count").textContent = `${catalog.benchmarks.length} available`; document.querySelectorAll("input[name$=python_executable]").forEach(input => { input.value = catalog.python_executable; }); benchmarkList.innerHTML = catalog.benchmarks.map((item, index) => `<label class="benchmark-choice"><input type="checkbox" name="benchmarks" value="${escapeHtml(item.id)}" ${index === 0 ? "checked" : ""}><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.case_id)}</small></span></label>`).join(""); restoreLocalSetup(false); }).catch(() => { benchmarkList.textContent = "Could not load local Benchmark catalog."; });
 setSetupMode();
 syncExecutionMode();
+syncSourceMode();
+syncObservationMode();
 updateSavedSetupStatus();
 refreshRun();

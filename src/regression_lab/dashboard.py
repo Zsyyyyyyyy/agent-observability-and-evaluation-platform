@@ -79,6 +79,7 @@ class DashboardRepository:
                 "behavior": behavior,
                 "adapter_capabilities": behavior.get("adapter_capabilities"),
                 "capability_source": behavior.get("capability_source"),
+                "evidence_provenance": behavior.get("evidence_provenance"),
                 "evidence_availability": behavior.get("evidence_availability"),
                 "behavior_snapshot": snapshot_trial_behavior(result),
             })

@@ -1,4 +1,4 @@
-"""Experiment expansion and deterministic Baseline/Candidate comparison."""
+"""展开实验，并对基线版本与候选版本进行确定性比较。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def expand_experiment(jobs: Iterable[dict[str, Any]], agents: Iterable[dict[str,
 
 
 def _numbers(jobs: list[dict[str, Any]], field: str) -> list[float]:
-    """Return numeric measurements without silently converting bad data to zero."""
+    """返回数值型测量结果，不将异常数据静默转换为零。"""
 
     values: list[float] = []
     for job in jobs:
@@ -38,7 +38,7 @@ def _numbers(jobs: list[dict[str, Any]], field: str) -> list[float]:
 
 
 def _nearest_rank(values: list[float], percentile: float) -> float | None:
-    """Return a nearest-rank percentile, or None when no measurement exists."""
+    """返回最近秩百分位数；没有测量值时返回 None。"""
 
     if not values:
         return None
@@ -47,11 +47,11 @@ def _nearest_rank(values: list[float], percentile: float) -> float | None:
 
 
 def _valid_pass(job: dict[str, Any]) -> bool:
-    """Return whether a Trial is eligible evidence for reliability metrics.
+    """判断一个 Trial 是否可以作为可靠性指标的有效证据。
 
-    Older persisted summaries do not carry ``trace_valid``. Their evaluation
-    already included TraceCompletenessEvaluator, so the legacy fallback keeps
-    report-only rebuilds compatible while new summaries carry the explicit bit.
+    较早版本持久化的汇总结果没有 ``trace_valid`` 字段。由于当时的评测已经
+    包含 TraceCompletenessEvaluator，兼容旧数据的回退逻辑可以支持 report-only
+    重建；新汇总结果则会显式保存这个字段。
     """
 
     trace_valid = job.get("trace_valid")
@@ -126,9 +126,8 @@ def _case_reliability(jobs: list[dict[str, Any]], required_trials: int) -> dict[
         "required_trials_per_case": required_trials,
         "case_count": len(grouped),
         "eligible_case_count": count,
-        # This is deliberately not standard Pass@k (which normally means at
-        # least one success in k attempts). Here a Case counts only when all
-        # required repeats pass, so it measures consistency.
+        # 这不是标准意义上的 Pass@k（通常表示 k 次尝试中至少成功一次）。
+        # 这里要求一个 Case 的所有必要重复运行都通过，因此衡量的是一致性。
         "all_pass_at_k": all_pass_at_k / count if count else None,
         "all_pass_at_k_case_count": all_pass_at_k,
         "flaky_case_rate": flaky / count if count else None,
@@ -183,7 +182,7 @@ def _case_comparisons(baseline_jobs: list[dict[str, Any]], candidate_jobs: list[
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
-    """Linearly interpolate a percentile for a deterministic bootstrap CI."""
+    """通过线性插值计算百分位数，用于确定性的 Bootstrap 置信区间。"""
 
     if not values:
         return None
@@ -196,13 +195,11 @@ def _percentile(values: list[float], percentile: float) -> float | None:
 
 
 def _paired_statistics(case_comparisons: list[dict[str, Any]], *, resamples: int = 2_000, seed: int = 20_260_812) -> dict[str, Any]:
-    """Estimate paired deltas while preserving each Case's repeated-Trial cluster.
+    """在保留每个 Case 的重复 Trial 聚类结构的前提下估计配对差值。
 
-    Re-sampling individual Trials would make three repeats of one task look like
-    three independent task families.  The bootstrap therefore samples Case IDs
-    with replacement and brings all valid paired Trial deltas for that Case.
-    This is intentionally a stability diagnostic, not a p-value or a release
-    Gate by itself.
+    如果单独重采样 Trial，同一个任务的三次重复运行会被误认为三个相互独立的
+    任务族。因此 Bootstrap 会有放回地采样 Case ID，并带上该 Case 的所有有效
+    配对 Trial 差值。这个结果只用于稳定性诊断，不能单独作为 p 值或发布门禁。
     """
 
     metrics = ("duration_ms", "model_tokens", "tool_calls")

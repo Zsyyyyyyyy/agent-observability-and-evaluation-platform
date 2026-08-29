@@ -222,6 +222,7 @@ def snapshot_trial_behavior(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "capability_source": capability_source,
+        "evidence_provenance": result.get("evidence_provenance") if isinstance(result.get("evidence_provenance"), dict) else {},
         "evidence_availability": {
             "model_calls": model_call_availability,
             "model_usage": model_usage_availability,

@@ -16,8 +16,8 @@ from regression_lab.protocol import agent_source_snapshot
 
 
 AGENT_SPEC_SCHEMA_VERSION = 1
-OBSERVATION_MODES = frozenset({"blackbox", "sdk"})
-_TEMPLATE_FIELDS = frozenset({"workspace", "task"})
+OBSERVATION_MODES = frozenset({"blackbox", "sdk", "langgraph"})
+_TEMPLATE_FIELDS = frozenset({"workspace", "task", "agent_source"})
 _PROTECTED_FIELDS = frozenset({
     "trial_id", "trace_id", "trace_path", "trace_output", "result_path", "result_output",
     "attempt_id", "attempt_path", "run_store", "output_dir", "worktree",
@@ -41,6 +41,7 @@ class AgentSpec:
     agent_id: str
     version: str
     command: tuple[str, ...]
+    source_root: Path | None
     observation_mode: str
     capabilities: AdapterCapabilities
 
@@ -50,7 +51,7 @@ class AgentSpec:
         AgentSpec v1 只允许这两个由 Trial 拥有的运行时字段出现在模板中。
         """
 
-        values = {"workspace": workspace, "task": task}
+        values = {"workspace": workspace, "task": task, "agent_source": str(self.source_root or "{agent_source}")}
         return [argument.format(**values) for argument in self.command]
 
     def as_external_command_config(self, *, workspace: str | None = None, task: str | None = None) -> dict[str, object]:
@@ -67,6 +68,7 @@ class AgentSpec:
             "adapter": "external-command",
             "agent_version": self.version,
             "external_command": command,
+            **({"agent_source_root": str(self.source_root)} if self.source_root is not None else {}),
             "adapter_capabilities": self.capabilities.as_dict(),
             "observation_mode": self.observation_mode,
         }
@@ -78,7 +80,7 @@ class AgentSpec:
         因此源码范围必须在 Artifact 中显式声明，不能隐式推断。
         """
 
-        source = agent_source_snapshot(self.command)
+        source = agent_source_snapshot(self.command, self.source_root)
         normalized = {
             "schema_version": AGENT_SPEC_SCHEMA_VERSION,
             "project_id": self.project_id,
@@ -87,6 +89,7 @@ class AgentSpec:
             "command": list(self.command),
             "observation_mode": self.observation_mode,
             "capabilities": self.capabilities.as_dict(),
+            "source_root": "{agent_source}" if self.source_root is not None else None,
         }
         canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return {
@@ -139,7 +142,7 @@ def _template_errors(argument: str, index: int) -> list[str]:
 def _normalize_capabilities(mode: str, observation: dict[str, Any], errors: list[str]) -> AdapterCapabilities | None:
     """根据观测模式归一化能力声明。
 
-    blackbox 模式下用户不能声明能力，trace 由平台侧 Worker 统一提供；
+    blackbox 与 langgraph 的能力由平台模式固定，避免用户把未观测能力声明成可用；
     sdk 模式下用户可逐项声明，默认全部关闭，需显式开启。
     """
     raw = observation.get("capabilities")
@@ -150,6 +153,14 @@ def _normalize_capabilities(mode: str, observation: dict[str, Any], errors: list
             trace=True, hierarchical_trace=False, model_usage=False, tool_trace=False,
             tool_semantics=False, test_trace=False, context_trace=False,
             workflow_trace=False, mcp_trace=False,
+        )
+    if mode == "langgraph":
+        if raw is not None:
+            errors.append("observation.capabilities is platform-defined when observation.mode is langgraph")
+        return AdapterCapabilities(
+            trace=True, hierarchical_trace=True, model_usage=True, tool_trace=True,
+            tool_semantics=False, test_trace=False, context_trace=False,
+            workflow_trace=True, mcp_trace=False,
         )
     if raw is None:
         raw = {}
@@ -234,7 +245,7 @@ def load_agent_spec(path: str | Path) -> AgentSpec:
         errors.append("observation must be a map")
         observation = {}
     errors.extend(_unknown_fields(agent, allowed={"id", "version"}, path="agent"))
-    errors.extend(_unknown_fields(runtime, allowed={"command"}, path="runtime"))
+    errors.extend(_unknown_fields(runtime, allowed={"command", "source_root"}, path="runtime"))
     errors.extend(_unknown_fields(observation, allowed={"mode", "capabilities"}, path="observation"))
     try:
         agent_id = validate_identifier(agent.get("id"), "agent.id")
@@ -257,9 +268,22 @@ def load_agent_spec(path: str | Path) -> AgentSpec:
             project_id = None
     command, command_errors = _command_errors(runtime.get("command"), spec_path)
     errors.extend(command_errors)
+    source_root_value = runtime.get("source_root")
+    source_root = None
+    if source_root_value is not None:
+        if not isinstance(source_root_value, str) or not source_root_value:
+            errors.append("runtime.source_root must be an absolute directory path")
+        elif not Path(source_root_value).expanduser().is_absolute():
+            errors.append("runtime.source_root must be an existing absolute directory path")
+        else:
+            source_root = Path(source_root_value).expanduser().resolve()
+            if not source_root.is_dir():
+                errors.append("runtime.source_root must be an existing absolute directory path")
+    if command is not None and any("{agent_source}" in value for value in command) and source_root is None:
+        errors.append("runtime.command uses {agent_source} but runtime.source_root is missing")
     mode = observation.get("mode")
     if mode not in OBSERVATION_MODES:
-        errors.append("observation.mode must be blackbox or sdk")
+        errors.append("observation.mode must be blackbox, sdk, or langgraph")
         mode = ""
     capabilities = _normalize_capabilities(mode, observation, errors) if mode else None
     if errors:
@@ -267,6 +291,6 @@ def load_agent_spec(path: str | Path) -> AgentSpec:
     # 走到这里说明所有校验通过，command 和 capabilities 必然非 None
     assert command is not None and capabilities is not None
     return AgentSpec(
-        path=spec_path, project_id=project_id, agent_id=agent_id, version=version, command=command,
+        path=spec_path, project_id=project_id, agent_id=agent_id, version=version, command=command, source_root=source_root,
         observation_mode=mode, capabilities=capabilities,
     )

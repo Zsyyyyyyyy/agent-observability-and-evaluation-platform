@@ -1,11 +1,13 @@
 import json
+import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from scripts.serve_studio import REGRESSION, STUDIO_HOST, _prepared_request, command_for, main, preflight
+from scripts.serve_studio import REGRESSION, STUDIO_HOST, _prepared_request, _prepared_request_with_snapshots, command_for, main, preflight
 
 
 class RunStudioTests(unittest.TestCase):
@@ -69,6 +71,97 @@ class RunStudioTests(unittest.TestCase):
         result = preflight(request)
 
         self.assertTrue(result["valid"])
+
+    def test_git_quick_setup_freezes_a_dirty_candidate_without_touching_repository(self):
+        with TemporaryDirectory() as directory:
+            repository = Path(directory)
+            for arguments in (("init",), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Studio Test")):
+                subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+            (repository / "agent.py").write_text("VERSION = 'baseline'\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repository, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "baseline"], cwd=repository, check=True, capture_output=True)
+            (repository / "agent.py").write_text("VERSION = 'candidate'\n", encoding="utf-8")
+            original_status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, text=True, capture_output=True, check=True).stdout
+            request = {
+                "launch_mode": "quick", "source_mode": "git_repository", "repository_path": str(repository),
+                "baseline_ref": "HEAD", "candidate_source": "working_tree", "project_id": "git-project", "agent_id": "git-agent",
+                "baseline_version": "v1", "candidate_version": "working-tree", "baseline_python_executable": sys.executable,
+                "candidate_python_executable": sys.executable, "launch_target_kind": "script", "baseline_entrypoint": "agent.py", "candidate_entrypoint": "agent.py",
+                "observation_mode": "blackbox", "benchmarks": ["smoke-case-design.yaml"], "trials": 1,
+                "execution_mode": "trusted_host", "trusted_host_confirmed": True,
+            }
+            preflight_result = preflight(request)
+            prepared, snapshots = _prepared_request_with_snapshots(request)
+            try:
+                self.assertTrue(preflight_result["valid"])
+                self.assertTrue(preflight_result["configuration"]["git_sources"]["candidate_dirty"])
+                self.assertIn("{agent_source}/agent.py", Path(prepared["baseline"]).read_text(encoding="utf-8"))
+                self.assertIsNotNone(snapshots)
+                self.assertEqual((snapshots.baseline_root / "agent.py").read_text(encoding="utf-8"), "VERSION = 'baseline'\n")
+                self.assertEqual((snapshots.candidate_root / "agent.py").read_text(encoding="utf-8"), "VERSION = 'candidate'\n")
+            finally:
+                if snapshots:
+                    snapshots.cleanup()
+            current_status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, text=True, capture_output=True, check=True).stdout
+            self.assertEqual(current_status, original_status)
+
+    def test_git_quick_setup_runs_an_experiment_from_frozen_sources(self):
+        with TemporaryDirectory() as directory, TemporaryDirectory() as runtime_directory:
+            repository = Path(directory)
+            for arguments in (("init",), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Studio Test")):
+                subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+            agent = repository / "agent.py"
+            agent.write_text(
+                "import argparse\nfrom pathlib import Path\n"
+                "parser = argparse.ArgumentParser(); parser.add_argument('--workspace'); parser.add_argument('--task'); args = parser.parse_args()\n"
+                "Path(args.workspace, 'src', 'calculator.py').write_text(\"def calculate(value):\\n    return 0 if value == '' else int(value) + 1\\n\", encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=repository, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "baseline"], cwd=repository, check=True, capture_output=True)
+            agent.write_text("# candidate snapshot\n" + agent.read_text(encoding="utf-8"), encoding="utf-8")
+            original_status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, text=True, capture_output=True, check=True).stdout
+            request = {
+                "launch_mode": "quick", "source_mode": "git_repository", "repository_path": str(repository),
+                "baseline_ref": "HEAD", "candidate_source": "working_tree", "project_id": "git-e2e", "agent_id": "git-agent",
+                "baseline_version": "v1", "candidate_version": "working-tree", "baseline_python_executable": sys.executable,
+                "candidate_python_executable": sys.executable, "launch_target_kind": "script", "baseline_entrypoint": "agent.py", "candidate_entrypoint": "agent.py",
+                "observation_mode": "blackbox", "benchmarks": ["smoke-case-design.yaml"], "trials": 1,
+                "execution_mode": "trusted_host", "trusted_host_confirmed": True,
+            }
+            prepared, snapshots = _prepared_request_with_snapshots(request)
+            try:
+                completed = subprocess.run(
+                    command_for(prepared), cwd=REGRESSION, text=True, capture_output=True, check=False,
+                    env={**os.environ, "REGRESSION_LAB_HOME": runtime_directory},
+                )
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                runtime = Path(next(line.removeprefix("Runtime: ") for line in completed.stdout.splitlines() if line.startswith("Runtime: ")))
+                protocol = json.loads((runtime / "protocol.json").read_text(encoding="utf-8"))
+                snapshots_by_label = {item["label"]: item["agent_spec_snapshot"] for item in protocol["agents"]}
+                self.assertFalse(snapshots_by_label["baseline"]["source_dirty"])
+                self.assertTrue(snapshots_by_label["candidate"]["source_dirty"])
+                self.assertNotEqual(snapshots_by_label["baseline"]["agent_source_hash"], snapshots_by_label["candidate"]["agent_source_hash"])
+            finally:
+                if snapshots:
+                    snapshots.cleanup()
+            current_status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, text=True, capture_output=True, check=True).stdout
+            self.assertEqual(current_status, original_status)
+
+    def test_quick_setup_accepts_langgraph_without_manual_capabilities(self):
+        request = {
+            "launch_mode": "quick", "project_id": "graph-project", "agent_id": "graph-agent",
+            "baseline_version": "v1", "candidate_version": "v2", "baseline_python_executable": sys.executable, "candidate_python_executable": sys.executable,
+            "baseline_entrypoint": str(REGRESSION / "examples" / "langgraph_coding_agent.py"),
+            "candidate_entrypoint": str(REGRESSION / "examples" / "langgraph_coding_agent.py"),
+            "observation_mode": "langgraph", "benchmarks": ["smoke-case-design.yaml"], "trials": 1,
+            "execution_mode": "trusted_host", "trusted_host_confirmed": True,
+        }
+
+        result = preflight(request)
+
+        self.assertTrue(result["valid"])
+        self.assertTrue(any("Callback" in warning for warning in result["warnings"]))
 
     def test_preflight_rejects_unknown_benchmark_and_out_of_range_trials(self):
         result = preflight({"benchmarks": ["outside.yaml"], "trials": 99})

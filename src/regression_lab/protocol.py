@@ -56,7 +56,7 @@ def tree_hash(path: str | Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _module_entrypoint(interpreter: str, module: str) -> Path | None:
+def _module_entrypoint(interpreter: str, module: str, source_root: Path | None = None) -> Path | None:
     """定位 ``python -m`` 的本地模块文件，而不执行 Agent 本身。"""
 
     lookup = (
@@ -65,8 +65,11 @@ def _module_entrypoint(interpreter: str, module: str) -> Path | None:
         "print(spec.origin if spec and spec.origin else '')"
     )
     try:
+        environment = os.environ.copy()
+        if source_root is not None:
+            environment["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), environment.get("PYTHONPATH", "")]))
         result = subprocess.run(
-            [interpreter, "-c", lookup, module],
+            [interpreter, "-c", lookup, module], env=environment,
             capture_output=True, text=True, check=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -76,20 +79,22 @@ def _module_entrypoint(interpreter: str, module: str) -> Path | None:
     return candidate.resolve() if location and candidate.is_file() else None
 
 
-def agent_source_snapshot(command: Iterable[str]) -> dict[str, str | None]:
+def agent_source_snapshot(command: Iterable[str], source_root: str | Path | None = None) -> dict[str, object]:
     """Identify the executable Agent source without persisting its local path."""
 
-    arguments = list(command)
+    root_hint = Path(source_root).resolve() if source_root else None
+    arguments = [argument.replace("{agent_source}", str(root_hint)) if root_hint is not None else argument for argument in command]
     if len(arguments) >= 3 and arguments[1] == "-m":
-        entrypoint = _module_entrypoint(arguments[0], arguments[2])
+        entrypoint = _module_entrypoint(arguments[0], arguments[2], root_hint)
     else:
         entrypoint = next((Path(value).resolve() for value in reversed(arguments) if Path(value).is_file()), None)
     if entrypoint is None:
-        return {"agent_source_hash": None, "entrypoint_hash": None, "source_scope": "unavailable", "source_revision": None}
+        return {"agent_source_hash": None, "entrypoint_hash": None, "source_scope": "unavailable", "source_revision": None, "source_dirty": None}
     entrypoint_hash = file_hash(entrypoint)
     try:
+        source_directory = root_hint if root_hint is not None else entrypoint.parent
         root_result = subprocess.run(
-            ["git", "-C", str(entrypoint.parent), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(source_directory), "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, check=True, timeout=3,
         )
         root = Path(root_result.stdout.strip())
@@ -111,18 +116,24 @@ def agent_source_snapshot(command: Iterable[str]) -> dict[str, str | None]:
             ["git", "-C", str(root), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True, timeout=3,
         ).stdout.strip()
+        dirty = bool(subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1"],
+            capture_output=True, text=True, check=True, timeout=3,
+        ).stdout.strip())
     except (OSError, subprocess.SubprocessError):
         return {
             "agent_source_hash": entrypoint_hash,
             "entrypoint_hash": entrypoint_hash,
             "source_scope": "entrypoint_only",
             "source_revision": None,
+            "source_dirty": None,
         }
     return {
         "agent_source_hash": "sha256:" + digest.hexdigest(),
         "entrypoint_hash": entrypoint_hash,
         "source_scope": "git_worktree",
         "source_revision": revision,
+        "source_dirty": dirty,
     }
 
 
@@ -167,10 +178,10 @@ def _manifest_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def _source_hashes(adapter: str, external_command: list[str] | None) -> dict[str, str]:
-    root = Path(__file__).resolve().parents[2]
-    sources = [root / "src" / "regression_lab" / "evaluators.py", root / "src" / "regression_lab" / "schema.py"]
+    package_root = Path(__file__).resolve().parent
+    sources = [package_root / "evaluators.py", package_root / "schema.py"]
     hashes = {source.name: file_hash(source) for source in sources if source.is_file()}
-    hashes["regression_lab_tree"] = tree_hash(root / "src" / "regression_lab")
+    hashes["regression_lab_tree"] = tree_hash(package_root)
     if adapter == "external-command" and external_command:
         identity = agent_source_snapshot(external_command)
         if isinstance(identity["agent_source_hash"], str):

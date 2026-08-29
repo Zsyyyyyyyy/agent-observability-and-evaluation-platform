@@ -246,8 +246,9 @@ class AttemptManager:
     def select_latest_terminal_attempt(self) -> tuple[AttemptPaths, dict[str, Any]] | None:
         """从不可变证据中选择最新且可读的终态 Attempt。"""
 
-        candidates: list[tuple[int, AttemptPaths, dict[str, Any]]] = []
-        for paths in self.list_attempts():
+        # list_attempts 已按 Attempt 序号升序排列；逆序读取即可得到最新有效证据，
+        # 无需先收集全部候选再排序。
+        for paths in reversed(self.list_attempts()):
             try:
                 manifest = self._load_owned_manifest(paths)
                 result = self._read_result(paths)
@@ -255,12 +256,9 @@ class AttemptManager:
                 continue
             if manifest.get("status") == "running" or not self._result_matches_manifest(paths, manifest):
                 continue
-            candidates.append((int(paths.attempt_id[8:]), paths, result))
-        if not candidates:
-            return None
-        _, paths, result = max(candidates, key=lambda item: item[0])
-        self.select_attempt(paths)
-        return paths, result
+            self.select_attempt(paths)
+            return paths, result
+        return None
 
     # 保留旧调用入口；新代码应直接使用语义明确的 select_latest_terminal_attempt。
     def select_best_attempt(self) -> tuple[AttemptPaths, dict[str, Any]] | None:

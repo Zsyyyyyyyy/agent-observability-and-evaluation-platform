@@ -20,11 +20,13 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from regression_lab.agent_spec import AgentSpecError
+from regression_lab.git_sources import GitSourceError, GitSourcePlan, GitSourceSnapshots, create_git_source_snapshots, entry_exists, inspect_git_sources, module_exists
 from regression_lab.manifest import ManifestError, load_manifest, validate_manifest
+from regression_lab.paths import asset_path, asset_root, is_source_checkout, runtime_root
 from scripts.regression_lab import _console_port, _validate_experiment_specs
 
 
-REGRESSION = Path(__file__).resolve().parents[1]
+REGRESSION = asset_root()
 STUDIO_HOST = "127.0.0.1"
 MAX_TRIALS = 10
 MAX_LOG_LINES = 160
@@ -39,6 +41,7 @@ class StudioRun:
     console_url: str | None = None
     returncode: int | None = None
     logs: list[str] = field(default_factory=list)
+    source_snapshots: GitSourceSnapshots | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -71,7 +74,9 @@ def _spec_path(value: object, label: str) -> Path:
     return path
 
 
-def _quick_spec_documents(request: dict[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+def _quick_spec_documents(
+    request: dict[str, object], source_roots: tuple[Path, Path] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
     def text(field: str, label: str) -> str:
         value = request.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -84,21 +89,37 @@ def _quick_spec_documents(request: dict[str, object]) -> tuple[dict[str, object]
     if target_kind not in {"script", "module"}:
         raise ValueError("启动方式无效")
     mode = request.get("observation_mode", "blackbox")
-    if mode not in {"blackbox", "sdk"}:
+    if mode not in {"blackbox", "sdk", "langgraph"}:
         raise ValueError("观测模式无效")
 
-    def document(python_field: str, version_field: str, entrypoint_field: str, label: str) -> dict[str, object]:
+    source_mode = request.get("source_mode", "two_entries")
+    if source_mode not in {"two_entries", "git_repository"}:
+        raise ValueError("源码来源无效")
+
+    def document(index: int, python_field: str, version_field: str, entrypoint_field: str, label: str) -> dict[str, object]:
         target = text(entrypoint_field, f"{label} {'模块名' if target_kind == 'module' else '入口文件'}")
         python = text(python_field, f"{label} Python 解释器路径")
-        command = [python, "-m", target] if target_kind == "module" else [python, target]
+        source_root = source_roots[index] if source_roots is not None else None
+        if source_mode == "git_repository":
+            if source_root is None:
+                raise ValueError("Git 源码快照尚未创建")
+            command = [python, "-m", target] if target_kind == "module" else [python, "{agent_source}/" + target]
+        else:
+            command = [python, "-m", target] if target_kind == "module" else [python, target]
+        runtime: dict[str, object] = {"command": [*command, "--workspace", "{workspace}", "--task", "{task}"]}
+        if source_root is not None:
+            runtime["source_root"] = str(source_root)
         return {
             "schema_version": 1, "project_id": project_id,
             "agent": {"id": agent_id, "version": text(version_field, f"{label} 版本")},
-            "runtime": {"command": [*command, "--workspace", "{workspace}", "--task", "{task}"]},
+            "runtime": runtime,
             "observation": {"mode": mode},
         }
 
-    return document("baseline_python_executable", "baseline_version", "baseline_entrypoint", "Baseline"), document("candidate_python_executable", "candidate_version", "candidate_entrypoint", "Candidate")
+    return (
+        document(0, "baseline_python_executable", "baseline_version", "baseline_entrypoint", "Baseline"),
+        document(1, "candidate_python_executable", "candidate_version", "candidate_entrypoint", "Candidate"),
+    )
 
 
 def _load_quick_specs(request: dict[str, object]):
@@ -111,33 +132,98 @@ def _load_quick_specs(request: dict[str, object]):
         return _validate_experiment_specs(str(baseline_path), str(candidate_path))
 
 
-def _prepared_request(request: dict[str, object]) -> dict[str, object]:
+def _validate_git_quick_specs(request: dict[str, object]) -> None:
+    """Git 预检不创建 clone，但仍应尽早校验版本身份和解释器。"""
+
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        baseline_document, candidate_document = _quick_spec_documents(request, (root, root))
+        baseline_path, candidate_path = root / "baseline.json", root / "candidate.json"
+        baseline_path.write_text(json.dumps(baseline_document), encoding="utf-8")
+        candidate_path.write_text(json.dumps(candidate_document), encoding="utf-8")
+        _validate_experiment_specs(str(baseline_path), str(candidate_path))
+
+
+def _git_plan(request: dict[str, object]) -> GitSourcePlan:
+    if request.get("source_mode", "two_entries") != "git_repository":
+        raise ValueError("Git 来源未启用")
+    repository = request.get("repository_path")
+    baseline_ref = request.get("baseline_ref")
+    candidate_source = request.get("candidate_source", "working_tree")
+    candidate_ref = request.get("candidate_ref")
+    if not isinstance(repository, str) or not isinstance(baseline_ref, str):
+        raise ValueError("Git 仓库路径和 Baseline ref 不能为空")
+    plan = inspect_git_sources(repository, baseline_ref, str(candidate_source), candidate_ref if isinstance(candidate_ref, str) else None)
+    if request.get("launch_target_kind", "script") == "script":
+        baseline_entry = request.get("baseline_entrypoint")
+        candidate_entry = request.get("candidate_entrypoint")
+        if not isinstance(baseline_entry, str) or not entry_exists(plan, baseline_entry, candidate=False):
+            raise ValueError("Baseline 入口文件不存在于指定 Git 版本中")
+        if not isinstance(candidate_entry, str) or not entry_exists(plan, candidate_entry, candidate=True):
+            raise ValueError("Candidate 入口文件不存在于指定 Git 版本中")
+    else:
+        baseline_module = request.get("baseline_entrypoint")
+        candidate_module = request.get("candidate_entrypoint")
+        if not isinstance(baseline_module, str) or not module_exists(plan, baseline_module, candidate=False):
+            raise ValueError("Baseline 模块不存在于指定 Git 版本中")
+        if not isinstance(candidate_module, str) or not module_exists(plan, candidate_module, candidate=True):
+            raise ValueError("Candidate 模块不存在于指定 Git 版本中")
+    return plan
+
+
+def _prepared_request_with_snapshots(request: dict[str, object]) -> tuple[dict[str, object], GitSourceSnapshots | None]:
     if request.get("launch_mode") != "quick":
-        return request
-    documents = _quick_spec_documents(request)
+        return request, None
+    snapshots = None
+    if request.get("source_mode", "two_entries") == "git_repository":
+        snapshots = create_git_source_snapshots(_git_plan(request))
+    try:
+        roots = (snapshots.baseline_root, snapshots.candidate_root) if snapshots else None
+        documents = _quick_spec_documents(request, roots)
+    except Exception:
+        if snapshots:
+            snapshots.cleanup()
+        raise
     canonical = json.dumps(documents, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    spec_root = REGRESSION / ".runtime" / "studio" / "agent-specs" / hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    # AgentSpec 是用户输入，不能写入随 pip 安装的只读包目录。
+    spec_root = (Path(snapshots.directory.name) / "agent-specs") if snapshots else runtime_root() / "studio" / "agent-specs" / hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     spec_root.mkdir(parents=True, exist_ok=True)
     paths = []
     for name, document in zip(("baseline.json", "candidate.json"), documents):
         path = spec_root / name
         path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         paths.append(str(path))
-    return {**request, "baseline": paths[0], "candidate": paths[1]}
+    return {**request, "baseline": paths[0], "candidate": paths[1]}, snapshots
+
+
+def _prepared_request(request: dict[str, object]) -> dict[str, object]:
+    """兼容原有测试和两入口流程；Git 快照生命周期由 Studio Run 持有。"""
+
+    prepared, snapshots = _prepared_request_with_snapshots(request)
+    if snapshots is not None:
+        snapshots.cleanup()
+        raise ValueError("Git sources require Studio run ownership")
+    return prepared
 
 
 def preflight(request: object) -> dict[str, object]:
     if not isinstance(request, dict):
         return {"valid": False, "errors": ["请求格式无效"]}
     errors: list[str] = []
+    source_plan = None
     try:
-        if request.get("launch_mode") == "quick":
+        if request.get("launch_mode") == "quick" and request.get("source_mode", "two_entries") == "git_repository":
+            source_plan = _git_plan(request)
+            _validate_git_quick_specs(request)
+            # Git 模式的 AgentSpec 依赖临时快照；预检仅校验可见输入，正式启动后再生成。
+            baseline = candidate = None
+        elif request.get("launch_mode") == "quick":
             baseline, candidate = _load_quick_specs(request)
         else:
             baseline_path = _spec_path(request.get("baseline"), "Baseline")
             candidate_path = _spec_path(request.get("candidate"), "Candidate")
             baseline, candidate = _validate_experiment_specs(str(baseline_path), str(candidate_path))
-    except (ValueError, AgentSpecError) as exc:
+    except (ValueError, AgentSpecError, GitSourceError) as exc:
         errors.append(str(exc))
         baseline = candidate = None
     try:
@@ -167,8 +253,26 @@ def preflight(request: object) -> dict[str, object]:
         errors.append("未检测到 Docker；请选择可信主机并确认风险，或先安装 Docker")
     if execution_mode == "trusted_host":
         warnings.append("Agent 与平台测试将在当前主机执行；仅适合你明确可信的本地命令。")
+    observation_mode = request.get("observation_mode") if request.get("launch_mode") == "quick" else (baseline.observation_mode if baseline else None)
+    if observation_mode == "langgraph":
+        warnings.append("LangGraph 模式只需在 graph.invoke()/stream() 入口加入一次平台 Callback；无需 Agent Output 文件或节点级埋点。")
     if errors:
         return {"valid": False, "errors": errors, "warnings": warnings}
+    if source_plan is not None:
+        configuration = {
+            "project_id": request.get("project_id"), "agent_id": request.get("agent_id"),
+            "baseline_version": request.get("baseline_version"), "candidate_version": request.get("candidate_version"),
+            "benchmark_count": len(manifests), "trial_count": len(manifests) * trials * 2,
+            "execution_mode": execution_mode,
+            "git_sources": {
+                "baseline_revision": source_plan.baseline_revision,
+                "candidate_revision": source_plan.candidate_revision,
+                "candidate_dirty": source_plan.candidate_dirty,
+                "tracked_changes": source_plan.tracked_change_count,
+                "untracked_changes": source_plan.untracked_change_count,
+            },
+        }
+        return {"valid": True, "errors": [], "warnings": [*warnings, "Git snapshots are created only after you start the Experiment; ignored files and local secrets are excluded."], "configuration": configuration}
     assert baseline is not None and candidate is not None
     return {
         "valid": True, "errors": [], "warnings": warnings,
@@ -182,8 +286,14 @@ def preflight(request: object) -> dict[str, object]:
 
 
 def command_for(request: dict[str, object]) -> list[str]:
+    # 源码模式保留可直接调试的脚本入口；wheel 中脚本不在资源目录，只能走模块入口。
+    entrypoint = (
+        [sys.executable, str(asset_path("scripts", "regression_lab.py"))]
+        if is_source_checkout()
+        else [sys.executable, "-m", "scripts.regression_lab"]
+    )
     command = [
-        sys.executable, str(REGRESSION / "scripts" / "regression_lab.py"), "experiment", "run",
+        *entrypoint, "experiment", "run",
         "--baseline", str(Path(str(request["baseline"])).expanduser().resolve()),
         "--candidate", str(Path(str(request["candidate"])).expanduser().resolve()),
         "--trials", str(request["trials"]),
@@ -209,15 +319,20 @@ def _read_run_output(run: StudioRun) -> None:
         run.returncode = returncode
         run.status = "completed" if returncode in {0, 1} else "failed"
         runtime = run.runtime
-    if runtime and Path(runtime).is_dir():
-        port = _console_port(None)
-        console = subprocess.Popen(
-            [sys.executable, str(REGRESSION / "scripts" / "serve_dashboard.py"), "--runtime", runtime, "--port", str(port)],
-            cwd=REGRESSION, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-        )
-        with run.lock:
-            run.console_process = console
-            run.console_url = f"http://127.0.0.1:{port}"
+    try:
+        if runtime and Path(runtime).is_dir():
+            port = _console_port(None)
+            console = subprocess.Popen(
+                [sys.executable, "-m", "scripts.serve_dashboard", "--runtime", runtime, "--port", str(port)],
+                cwd=REGRESSION, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+            )
+            with run.lock:
+                run.console_process = console
+                run.console_url = f"http://127.0.0.1:{port}"
+    finally:
+        if run.source_snapshots is not None:
+            run.source_snapshots.cleanup()
+            run.source_snapshots = None
 
 
 def run_status(run: StudioRun) -> dict[str, object]:
@@ -229,6 +344,12 @@ def handler_for(static_root: Path, run: StudioRun):
     class StudioHandler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(static_root), **kwargs)
+
+        def log_message(self, format: str, *args: object) -> None:
+            # Studio 每两秒轮询一次运行状态；成功响应不应淹没真正的 Agent 日志。
+            if self.command == "GET" and urlparse(self.path).path == "/api/run":
+                return
+            super().log_message(format, *args)
 
         def _json(self, value: object, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -262,11 +383,20 @@ def handler_for(static_root: Path, run: StudioRun):
             if not checked["valid"]:
                 return self._json(checked, HTTPStatus.UNPROCESSABLE_ENTITY)
             assert isinstance(request, dict)
-            prepared = _prepared_request(request)
+            try:
+                prepared, snapshots = _prepared_request_with_snapshots(request)
+            except (ValueError, AgentSpecError, GitSourceError) as exc:
+                return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
             with run.lock:
                 if run.process is not None and run.process.poll() is None:
                     return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
-                run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                try:
+                    run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                except OSError:
+                    if snapshots:
+                        snapshots.cleanup()
+                    raise
+                run.source_snapshots = snapshots
                 run.status, run.runtime, run.console_url, run.returncode, run.logs = "running", None, None, None, []
                 threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
             return self._json(run_status(run), HTTPStatus.ACCEPTED)
@@ -281,7 +411,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8764)
     args = parser.parse_args()
     # Studio 可以启动本机 Agent；不提供网络监听选项，避免无认证执行入口被误暴露。
-    server = ThreadingHTTPServer((STUDIO_HOST, args.port), handler_for(REGRESSION / "web", StudioRun()))
+    server = ThreadingHTTPServer((STUDIO_HOST, args.port), handler_for(asset_path("web"), StudioRun()))
     print(f"Run Studio: http://{STUDIO_HOST}:{args.port}")
     try: server.serve_forever()
     except KeyboardInterrupt: pass

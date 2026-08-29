@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A minimal LangGraph Coding Agent for the external-command contract."""
+"""只在 Graph 启动点注入 Regression Lab Callback 的离线 LangGraph 示例。"""
 
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from regression_lab.sdk import AgentObserver
-from regression_lab.tool_semantics import semantic_tool_attributes
+from regression_lab_observer.langgraph import LangGraphObserver
 
 
 PROFILES = {
@@ -30,7 +29,6 @@ TARGETS = {
 
 
 class AgentState(TypedDict):
-    observer: AgentObserver
     worktree: Path
     case_id: str
     agent_version: str
@@ -38,65 +36,30 @@ class AgentState(TypedDict):
     replacement: str
 
 
-def _usage(span: object, prompt_tokens: int, completion_tokens: int) -> None:
-    span.record_usage({
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-    })
-
-
 def planner(state: AgentState) -> dict:
-    observer = state["observer"]
-    with observer.span("workflow.planner", "workflow", node="Planner"):
-        with observer.model_call(model="langgraph-deterministic-planner") as call:
-            _usage(call, 100, 20)
+    """真实 Agent 在此调用 LangChain 模型时，框架 Callback 会自动观测它。"""
+
     return {}
 
 
 def _read_target(state: AgentState) -> None:
-    observer, worktree, target_path = state["observer"], state["worktree"], state["target_path"]
-    with observer.tool_call("read_file", **semantic_tool_attributes("read_file", {"path": target_path}, worktree=worktree)) as tool:
-        tool.preview((worktree / target_path).read_text(encoding="utf-8"))
+    (state["worktree"] / state["target_path"]).read_text(encoding="utf-8")
 
 
 def coder(state: AgentState) -> dict:
-    observer, worktree, version = state["observer"], state["worktree"], state["agent_version"]
-    with observer.span("workflow.coder", "workflow", node="Coder"):
-        with observer.model_call(model="langgraph-deterministic-coder") as call:
-            _usage(call, 120, 30)
-        if version == "langgraph-agent-failure-probe":
-            with observer.tool_call("remove_worktree", **semantic_tool_attributes("remove_worktree", {}, worktree=worktree)):
-                pass
+    _read_target(state)
+    # V2 复用首次读取结果；V1 仅多做一次相同读取，修复结果完全一致。
+    if state["agent_version"] == "langgraph-agent-v1":
         _read_target(state)
-        # V2 reuses this observation; V1's only strategy difference is one
-        # redundant read of the identical file before the same edit.
-        if version == "langgraph-agent-v1":
-            _read_target(state)
-        target_path = state["target_path"]
-        with observer.tool_call(
-            "edit_file",
-            **semantic_tool_attributes("edit_file", {"path": target_path, "new_text": "[redacted]"}, worktree=worktree),
-        ) as tool:
-            (worktree / target_path).write_text(state["replacement"], encoding="utf-8")
-            tool.preview(f"updated {target_path}")
+    (state["worktree"] / state["target_path"]).write_text(state["replacement"], encoding="utf-8")
     return {}
 
 
 def verifier(state: AgentState) -> dict:
-    observer, worktree = state["observer"], state["worktree"]
-    with observer.span("workflow.verifier", "workflow", node="Verifier"):
-        with observer.model_call(model="langgraph-deterministic-verifier") as call:
-            _usage(call, 90, 15)
-        with observer.tool_call("bash", **semantic_tool_attributes("bash", {"command": "configured_test"}, worktree=worktree)) as tool:
-            completed = subprocess.run(
-                shlex.split(os.environ["REGRESSION_TEST_COMMAND"]), cwd=worktree,
-                text=True, capture_output=True, check=False,
-            )
-            if completed.returncode:
-                tool.end("error", exit_code=completed.returncode)
-            else:
-                tool.preview("verification passed")
+    subprocess.run(
+        shlex.split(os.environ["REGRESSION_TEST_COMMAND"]), cwd=state["worktree"],
+        text=True, capture_output=True, check=False,
+    )
     return {}
 
 
@@ -121,10 +84,11 @@ def describe_protocol() -> int:
     profiles = {}
     for version in versions:
         profile = PROFILES.get(version)
-        if profile is None:
-            continue
-        digest = hashlib.sha256(profile.encode("utf-8")).hexdigest()
-        profiles[version] = {"profile_id": profile, "rendered_prompt_set_hash": f"sha256:{digest}"}
+        if profile is not None:
+            profiles[version] = {
+                "profile_id": profile,
+                "rendered_prompt_set_hash": "sha256:" + hashlib.sha256(profile.encode("utf-8")).hexdigest(),
+            }
     print(json.dumps({"profiles": profiles}, ensure_ascii=False))
     return 0
 
@@ -132,24 +96,21 @@ def describe_protocol() -> int:
 def main() -> int:
     if "--describe-protocol" in sys.argv:
         return describe_protocol()
-    observer = AgentObserver.from_environment()
     case_id = os.environ["REGRESSION_CASE_ID"]
     target = TARGETS.get(case_id)
     if target is None:
         raise ValueError(f"unsupported integration Case: {case_id}")
     version = os.environ["REGRESSION_AGENT_VERSION"]
-    profile = PROFILES.get(version, "langgraph-failure-probe")
     state: AgentState = {
-        "observer": observer,
         "worktree": Path(os.environ["REGRESSION_WORKTREE"]),
         "case_id": case_id,
         "agent_version": version,
         "target_path": target[0],
         "replacement": target[1],
     }
-    with observer.run(agent_profile=profile):
-        build_graph().invoke(state)
-    AgentObserver.write_agent_output("LangGraph workflow completed.", "workflow_completed")
+    # 唯一接入点：节点、工具和业务实现不感知 Regression Lab。
+    with LangGraphObserver.from_environment() as observation:
+        build_graph().invoke(state, config={"callbacks": [observation.callback]})
     return 0
 
 

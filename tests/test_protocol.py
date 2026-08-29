@@ -3,12 +3,13 @@ import os
 import subprocess
 import sys
 import unittest
+from argparse import Namespace
 from unittest import mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from regression_lab.protocol import build_execution_plan, build_protocol, compare_protocols, protocol_fingerprint
-from scripts.run_experiment import _attempt_source_comparability, describe_prompt_profiles, parse_external_arm_configs
+from scripts.run_experiment import _attempt_source_comparability, _freeze_or_restore_protocol, describe_prompt_profiles, parse_external_arm_configs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,6 +125,29 @@ class ProtocolTests(unittest.TestCase):
         hashes = [item["rendered_prompt_set_hash"] for item in protocol["agents"]]
         self.assertTrue(all(value.startswith("sha256:") for value in hashes))
         self.assertNotEqual(hashes[0], hashes[1])
+
+    def test_langgraph_experiment_does_not_require_sdk_protocol_handshake(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self._manifest(root)
+            args = Namespace(
+                report_only=False, external_observation_mode="langgraph", adapter="external-command",
+                trials=1, bash=False, schedule_seed=20260816,
+                comparison_intent="prompt_profile_only", allowed_differences=None,
+                allow_protocol_mismatch=False,
+            )
+            protocol_state = _freeze_or_restore_protocol(
+                args,
+                agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                manifests=[(Path(manifest["_manifest_path"]), manifest)], jobs=[{"trial_index": 1}],
+                output_dir=root / "runtime", external_command=[sys.executable, str(ROOT / "examples" / "external_blackbox_agent.py")],
+                external_arm_configs=None, adapter_capabilities=None, use_docker=False,
+            )
+
+        self.assertIsNotNone(protocol_state)
+        assert protocol_state is not None
+        protocol, _ = protocol_state
+        self.assertTrue(all(item["rendered_prompt_set_hash"] == "unavailable" for item in protocol["agents"]))
 
     def test_protocol_rejects_invalid_sampling_configuration(self):
         with TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_TEMPERATURE": "not-a-number"}, clear=False):
