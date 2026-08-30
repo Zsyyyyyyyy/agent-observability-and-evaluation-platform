@@ -7,7 +7,68 @@ from regression_lab.dashboard import DashboardRepository
 from regression_lab.evolution import evaluation_context_hash
 
 
+def _trace_events(*spans: tuple[str, str | None, str]) -> list[dict]:
+    events = []
+    for sequence, (span_id, parent_span_id, name) in enumerate(spans, start=1):
+        events.append({"kind": "span_start", "span_id": span_id, "parent_span_id": parent_span_id, "name": name, "span_type": "workflow", "ts": sequence, "attributes": {}})
+    for sequence, (span_id, _, _) in enumerate(reversed(spans), start=len(spans) + 1):
+        events.append({"kind": "span_end", "span_id": span_id, "ts": sequence, "attributes": {}})
+    return events
+
+
+def _write_trace_trial(root: Path, version: str, events: list[dict], failure_span_id: str | None) -> None:
+    trial = root / version / "case"; trial.mkdir(parents=True)
+    trace = trial / "trace.jsonl"
+    trace.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
+    failure_span = {"span_id": failure_span_id} if failure_span_id is not None else None
+    (trial / "result.json").write_text(json.dumps({
+        "trial_id": f"case_{version}", "trace_path": str(trace),
+        "failure_attribution": {"failure_span": failure_span},
+    }), encoding="utf-8")
+
+
 class DashboardRepositoryTests(unittest.TestCase):
+    def test_failure_spans_align_through_matched_trace_row(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_trace_trial(root, "baseline", _trace_events(("baseline-root", None, "agent.run"), ("baseline-failure", "baseline-root", "workflow.execute")), "baseline-failure")
+            _write_trace_trial(root, "candidate", _trace_events(("candidate-root", None, "agent.run"), ("candidate-failure", "candidate-root", "workflow.execute")), "candidate-failure")
+            diff = DashboardRepository(root).trace_diff("baseline/case", "candidate/case")
+
+        self.assertEqual(diff["schema_version"], 2)
+        self.assertNotEqual(diff["failure_alignment"]["baseline"]["span_id"], diff["failure_alignment"]["candidate"]["span_id"])
+        self.assertTrue(diff["failure_alignment"]["aligned"])
+
+    def test_trace_diff_preserves_one_sided_subtree_for_console_rendering(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_trace_trial(root, "baseline", _trace_events(("root", None, "agent.run"), ("legacy", "root", "workflow.legacy"), ("tool", "legacy", "tool.call")), None)
+            _write_trace_trial(root, "candidate", _trace_events(("candidate-root", None, "agent.run")), None)
+            diff = DashboardRepository(root).trace_diff("baseline/case", "candidate/case")
+
+        removed = [row for row in diff["rows"] if row["kind"] == "removed"]
+        self.assertEqual([row["baseline"]["name"] for row in removed], ["workflow.legacy", "tool.call"])
+        self.assertEqual(removed[1]["parent_row_id"], removed[0]["row_id"])
+
+    def test_failure_spans_on_different_matched_rows_do_not_align(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_trace_trial(root, "baseline", _trace_events(("baseline-root", None, "agent.run"), ("baseline-plan", "baseline-root", "workflow.plan"), ("baseline-execute", "baseline-root", "workflow.execute")), "baseline-plan")
+            _write_trace_trial(root, "candidate", _trace_events(("candidate-root", None, "agent.run"), ("candidate-plan", "candidate-root", "workflow.plan"), ("candidate-execute", "candidate-root", "workflow.execute")), "candidate-execute")
+            diff = DashboardRepository(root).trace_diff("baseline/case", "candidate/case")
+
+        self.assertFalse(diff["failure_alignment"]["aligned"])
+
+    def test_failure_span_alignment_requires_both_sides(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            events = _trace_events(("root", None, "agent.run"))
+            _write_trace_trial(root, "baseline", events, "root")
+            _write_trace_trial(root, "candidate", events, None)
+            diff = DashboardRepository(root).trace_diff("baseline/case", "candidate/case")
+
+        self.assertFalse(diff["failure_alignment"]["aligned"])
+
     def test_aggregates_trials_and_blocks_path_escape(self):
         with TemporaryDirectory() as directory:
             root = Path(directory); trial = root / "baseline" / "case"; trial.mkdir(parents=True)

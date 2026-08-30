@@ -380,14 +380,24 @@ def _provenance_rules(experiment: dict[str, Any], policy: dict[str, Any]) -> lis
     accepted_cost_origins = policy.get("accepted_cost_evidence_origins", ["platform_observed", "framework_observed"])
     if not isinstance(accepted_cost_origins, list) or not all(isinstance(item, str) for item in accepted_cost_origins):
         raise ValueError("policy.accepted_cost_evidence_origins must be a string array")
-    observed_cost_jobs = [job for job in jobs if job.get("model_tokens") is not None or job.get("tool_calls") is not None]
-    if observed_cost_jobs:
-        trusted = all(
+    for metric, provenance_field, rule_name, label in (
+        ("model_tokens", "model_usage", "model_usage_evidence_provenance", "model usage"),
+        ("tool_calls", "tool_trace", "tool_trace_evidence_provenance", "tool-call evidence"),
+    ):
+        observed_jobs = [job for job in jobs if job.get(metric) is not None]
+        if not observed_jobs:
+            continue
+        # 成本平均值不能由部分 Trial 代替完整样本；每一条已观测证据都必须可追溯。
+        complete = len(observed_jobs) == len(jobs)
+        trusted = complete and all(
             isinstance(job.get("evidence_provenance"), dict)
-            and job["evidence_provenance"].get("model_usage", job["evidence_provenance"].get("tool_trace")) in accepted_cost_origins
-            for job in observed_cost_jobs
+            and job["evidence_provenance"].get(provenance_field) in accepted_cost_origins
+            for job in observed_jobs
         )
-        rules.append(GateRule("cost_evidence_provenance", 1.0 if trusted else 0.0, "== 1.0", trusted, "observed cost evidence must use an accepted origin"))
+        rules.append(GateRule(
+            rule_name, 1.0 if trusted else 0.0, "== 1.0", trusted,
+            f"all observed {label} must use an accepted origin",
+        ))
     return rules
 
 
@@ -498,7 +508,8 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
     )
     evidence_inconclusive_rules = {
         "protocol_strict_comparability", "paired_case_coverage", "paired_trial_coverage",
-        "core_evidence_provenance", "cost_evidence_provenance",
+        "core_evidence_provenance", "model_usage_evidence_provenance",
+        "tool_trace_evidence_provenance",
     }
     unavailable = [rule.name for rule in rules if rule.actual is None]
     required_unavailable = [rule.name for rule in rules if rule.actual is None and rule.required]

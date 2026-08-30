@@ -311,18 +311,68 @@ function renderCaseDetail(caseId, shouldScroll = false) {
   if (shouldScroll) panel.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 async function showTraceDiff(baseline, candidate) {
+  const panel=document.querySelector('#trace-diff-panel');
+  const summary=document.querySelector('#trace-diff-summary');
+  const rowsContainer=document.querySelector('#trace-diff-rows');
+  // 配对 Trial 可直接进入比较，不能要求用户先打开任意一侧 Artifact 才看得到结果。
+  document.querySelector('#detail-empty').hidden=true;
+  document.querySelector('#detail').hidden=false;
   try {
     const response=await api(`/api/trace-diff?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`);
-    if(response.available!==true) return;
+    if(response.available!==true) throw new Error('Trace Diff unavailable');
     const diff=response.data||{}, first=diff.first_divergence, critical=diff.critical_path||{}, failure=diff.failure_alignment||{};
     const describe=span=>span ? `${span.span_type||'span'} · ${span.name||'unknown'} · ${fmt(span.duration_ms)} · ${fmtTokens(span.tokens)} · ${fmtTools(span.tool_calls)}` : '—';
     const delta=row=>row.delta ? `Δ ${fmt(row.delta.duration_ms)} · ${fmtTokens(row.delta.tokens)} · ${fmtTools(row.delta.tool_calls)}` : row.kind.toUpperCase();
-    const rows=(diff.rows||[]).map(row=>`<div class="trace-diff-row ${esc(row.kind)}" style="--trace-depth:${Number(row.depth)||0}"><span>${esc(describe(row.baseline))}</span><b>${esc(delta(row))}</b><span>${esc(describe(row.candidate))}</span></div>`).join('');
-    document.querySelector('#trace-diff-panel').hidden=false;
-    document.querySelector('#trace-diff-summary').textContent=`${diff.matched_span_count||0} aligned · ${first?`first divergence: ${first.kind} ${first.baseline?.name||first.candidate?.name}`:'no structural divergence'} · critical path ${fmt(critical.baseline?.duration_ms)} → ${fmt(critical.candidate?.duration_ms)} · failure spans ${failure.aligned?'aligned':'not aligned'}`;
-    document.querySelector('#trace-diff-rows').innerHTML=rows || '<p class="empty">No Trace spans available for alignment.</p>';
-    document.querySelector('#trace-diff-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
-  } catch {}
+    const diffRows=diff.rows||[], childrenByParent=new Map(), parentByRow=new Map(), collapsedRows=new Set();
+    diffRows.forEach(row=>{
+      const parent=row.parent_row_id||'root', children=childrenByParent.get(parent)||[];
+      children.push(row.row_id); childrenByParent.set(parent,children); parentByRow.set(row.row_id,row.parent_row_id||null);
+    });
+    const node=(span,row,side)=>{
+      if(!span)return `<div class="trace-side ${side} missing" aria-label="No aligned span">—</div>`;
+      const expandable=childrenByParent.has(row.row_id);
+      const toggle=expandable
+        ? `<button type="button" class="trace-node-toggle" data-trace-diff-toggle="${esc(row.row_id)}" aria-expanded="true" aria-label="Toggle child spans">⌄</button>`
+        : '<span class="trace-node-stem" aria-hidden="true"></span>';
+      return `<div class="trace-side ${side}"><div class="trace-node" style="--trace-depth:${Number(row.depth)||0}">${toggle}<span class="trace-node-label">${esc(describe(span))}</span></div></div>`;
+    };
+    const rows=diffRows.map(row=>[
+      `<div class="trace-diff-row ${esc(row.kind)} ${esc(row.divergence||'')} ${first?.row_id===row.row_id?'first-divergence':''}" data-row-id="${esc(row.row_id)}" data-parent-row-id="${esc(row.parent_row_id||'')}">`,
+      node(row.baseline,row,'baseline'), `<div class="trace-delta"><b>${esc(delta(row))}</b></div>`, node(row.candidate,row,'candidate'), '</div>',
+    ].join('')).join('');
+    panel.hidden=false;
+    const firstSummary=first
+      ? `<button type="button" class="trace-diff-first" data-first-divergence="${esc(first.row_id)}"><b>FIRST BEHAVIOR DIVERGENCE</b><span>${esc((first.path||[]).join(' → '))}</span><span>Baseline: ${esc(first.baseline?.status||'—')} · Candidate: ${esc(first.candidate?.status||'—')} · ${esc(first.reason||first.kind)}</span></button>`
+      : '<span>No structural or outcome divergence · efficiency metrics may still differ</span>';
+    summary.innerHTML=`${firstSummary}<span>${diff.matched_span_count||0} aligned · critical path ${fmt(critical.baseline?.duration_ms)} → ${fmt(critical.candidate?.duration_ms)} · failure spans ${failure.aligned?'aligned':'not aligned'}</span>`;
+    rowsContainer.innerHTML=rows || '<p class="empty">No Trace spans available for alignment.</p>';
+    const refreshVisibility=()=>{
+      document.querySelectorAll('#trace-diff-rows .trace-diff-row').forEach(element=>{
+        let parent=parentByRow.get(element.dataset.rowId), hidden=false;
+        while(parent){ if(collapsedRows.has(parent)){ hidden=true; break; } parent=parentByRow.get(parent); }
+        element.hidden=hidden;
+      });
+      document.querySelectorAll('[data-trace-diff-toggle]').forEach(toggle=>{
+        toggle.setAttribute('aria-expanded',String(!collapsedRows.has(toggle.dataset.traceDiffToggle)));
+      });
+    };
+    document.querySelectorAll('[data-trace-diff-toggle]').forEach(toggle=>toggle.addEventListener('click',()=>{
+      const rowId=toggle.dataset.traceDiffToggle;
+      collapsedRows.has(rowId)?collapsedRows.delete(rowId):collapsedRows.add(rowId);
+      refreshVisibility();
+    }));
+    summary.querySelector('[data-first-divergence]')?.addEventListener('click',event=>{
+      const rowId=event.currentTarget.dataset.firstDivergence;
+      for(let parent=parentByRow.get(rowId);parent;parent=parentByRow.get(parent)) collapsedRows.delete(parent);
+      refreshVisibility();
+      document.querySelector(`#trace-diff-rows [data-row-id="${rowId}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});
+    });
+    panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+  } catch {
+    panel.hidden=false;
+    summary.textContent='Trace Diff unavailable';
+    rowsContainer.innerHTML='<p class="empty">Trace Diff unavailable</p>';
+  }
 }
 function renderCaseDiagnosis(caseId) {
   const report=caseComparisons().find(item=>item.case_id===caseId), pairs=report?.paired_trials || [];

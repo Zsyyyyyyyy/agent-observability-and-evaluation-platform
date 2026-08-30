@@ -113,14 +113,23 @@ class DashboardRepository:
         if baseline is None or candidate is None:
             return None
         diff = compare_traces(baseline["trace"], candidate["trace"])
-        failure = {
-            "baseline": (baseline["result"].get("failure_attribution") or {}).get("failure_span"),
-            "candidate": (candidate["result"].get("failure_attribution") or {}).get("failure_span"),
+        baseline_failure = (baseline["result"].get("failure_attribution") or {}).get("failure_span")
+        candidate_failure = (candidate["result"].get("failure_attribution") or {}).get("failure_span")
+        baseline_failure_id = baseline_failure.get("span_id") if isinstance(baseline_failure, dict) else None
+        candidate_failure_id = candidate_failure.get("span_id") if isinstance(candidate_failure, dict) else None
+        # Span ID 只在单次运行内有效；失败点是否对齐必须通过同一条结构匹配记录判断。
+        aligned = baseline_failure_id is not None and candidate_failure_id is not None and any(
+            row["kind"] == "matched"
+            and row["baseline"]["span_id"] == baseline_failure_id
+            and row["candidate"]["span_id"] == candidate_failure_id
+            for row in diff["rows"]
+            if row["baseline"] and row["candidate"]
+        )
+        diff["failure_alignment"] = {
+            "baseline": baseline_failure,
+            "candidate": candidate_failure,
+            "aligned": aligned,
         }
-        diff["failure_alignment"] = {**failure, "aligned": any(
-            row["kind"] == "matched" and row["baseline"]["span_id"] == failure["baseline"] and row["candidate"]["span_id"] == failure["candidate"]
-            for row in diff["rows"] if row["baseline"] and row["candidate"]
-        )}
         return diff
 
     def policy_stop_evidence(self) -> dict[str, Any]:
