@@ -9,7 +9,7 @@ import sys
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -43,6 +43,14 @@ def handler_for(repository: DashboardRepository, static_root: Path):
             if path == "/api/context": return self._json(repository.validate_runtime_context())
             if path == "/api/evolution": return self._json(repository.evolution())
             if path == "/api/policy-stop": return self._json(repository.policy_stop_evidence())
+            if path == "/api/trace-diff":
+                query = parse_qs(parsed.query)
+                baseline = query.get("baseline", [""])[0]
+                candidate = query.get("candidate", [""])[0]
+                diff = repository.trace_diff(baseline, candidate)
+                if diff is None:
+                    return self._json({"error": "trace trial not found"}, HTTPStatus.NOT_FOUND)
+                return self._json(repository.runtime_response(lambda: diff))
             if path.startswith("/api/trials/"):
                 validation = repository.validate_runtime_context()
                 if not validation["available"]:

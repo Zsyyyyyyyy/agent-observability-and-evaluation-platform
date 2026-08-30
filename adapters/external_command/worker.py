@@ -48,10 +48,10 @@ from regression_lab.behavior import summarize_trial_behavior
 from regression_lab.attribution import attribute_trial
 from regression_lab.runner import terminate_process_group
 from regression_lab.sandbox import DockerSandbox, SandboxConfig, SandboxUnavailable
-from regression_lab.schema import validate_trace
+from regression_lab.schema import trace_conformance, validate_trace
 from regression_lab.store import RunStore
 from regression_lab.artifacts import write_json_atomically
-from regression_lab.protocol import agent_source_snapshot
+from regression_lab.protocol import agent_source_snapshot, runtime_environment_identity
 from regression_lab.trace import TraceCollector
 from regression_lab.paths import python_import_root
 
@@ -192,6 +192,24 @@ def _model_usage(trace_path: Path) -> dict[str, int]:
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 totals[key] = totals.get(key, 0) + value
     return totals
+
+
+def _trace_events(trace_path: Path) -> list[dict[str, Any]]:
+    """统一读取 Trace；合规性和聚合必须基于同一份原始证据。"""
+
+    try:
+        lines = trace_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    events = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
 def _root_profile(trace_path: Path) -> str | None:
@@ -387,6 +405,15 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             result["status"], result["error"] = "infra_failed", f"git evidence failed: {type(exc).__name__}: {exc}"
         result["trace_validation"] = validate_trace(trace_path, expected_trace_id=trace_id, expected_trial_id=trial_id, expected_root_attributes={"agent_version": str(spec.get("agent_version", "")), "adapter_id": "external-command"}).as_dict()
+        result["trace_conformance"] = trace_conformance(_trace_events(trace_path), observation_mode)
+        command = spec.get("external_command")
+        interpreter = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
+        environment = runtime_environment_identity(interpreter)
+        result["runtime_environment"] = environment
+        expected_environment = spec.get("expected_runtime_environment_hash")
+        result["runtime_environment_matches_protocol"] = expected_environment is None or (
+            isinstance(expected_environment, str) and environment.get("identity_hash") == expected_environment
+        )
         if observation_mode == "langgraph" and result["status"] == "completed":
             callback_status = _observation_status(observation_status)
             result["framework_observation"] = callback_status or {"complete": False, "errors": ["status_missing"]}
@@ -400,7 +427,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
                 if trace_kind:
                     result["model_failure"] = {"kind": trace_kind}
         result["behavior"] = summarize_trial_behavior(result)
-        if result["status"] == "completed" and not result["trace_validation"]["valid"]:
+        if result["status"] == "completed" and (not result["trace_validation"]["valid"] or not result["trace_conformance"]["valid"] or not result["runtime_environment_matches_protocol"]):
             result.update({"status": "trace_incomplete", "error": "trace validation failed"})
         result["evaluation"] = evaluate_baseline(
             result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),

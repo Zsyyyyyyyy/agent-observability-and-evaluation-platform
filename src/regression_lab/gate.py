@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +16,7 @@ class GateRule:
     expected: str
     passed: bool
     message: str
+    required: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -22,6 +25,7 @@ class GateRule:
             "expected": self.expected,
             "passed": self.passed,
             "message": self.message,
+            "required": self.required,
         }
 
 
@@ -377,20 +381,26 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
     rules.extend(_coverage_rules(experiment, policy))
 
     rules.extend(_quality_rules(baseline, candidate, policy))
-    rules.append(_cost_rule(
+    cost_rules = [_cost_rule(
         baseline, candidate, policy,
         metric="avg_tool_calls", name="average_tool_calls_limit",
         ratio_key="max_avg_tool_calls_ratio",
         zero_baseline_key="max_avg_tool_calls_absolute_increase_when_baseline_zero",
         label="tool-call",
-    ))
-    rules.append(_cost_rule(
+    ), _cost_rule(
         baseline, candidate, policy,
         metric="avg_model_tokens", name="average_model_tokens_limit",
         ratio_key="max_avg_model_tokens_ratio",
         zero_baseline_key="max_avg_model_tokens_absolute_increase_when_baseline_zero",
         label="token",
-    ))
+    )]
+    require_cost_evidence = policy.get("require_cost_evidence", True)
+    if not isinstance(require_cost_evidence, bool):
+        raise ValueError("policy.require_cost_evidence must be a boolean")
+    # Black-box 没有模型/工具观测时，不能因“未观测”被误判为成本回归；
+    # 一旦指标已观测到，仍按同一阈值阻断真实回归。
+    for rule in cost_rules:
+        rules.append(GateRule(**{**rule.__dict__, "required": require_cost_evidence or rule.actual is not None}))
 
     baseline_reliability = reliability.get("baseline") or {}
     candidate_reliability = reliability.get("candidate") or {}
@@ -415,7 +425,7 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
         label="flaky case rate",
     ))
 
-    hard_failures = [rule.name for rule in rules if not rule.passed]
+    hard_failures = [rule.name for rule in rules if not rule.passed and rule.required]
     correctness_reliability_rules = {
         "candidate_completion_rate_minimum", "candidate_evaluation_pass_rate_minimum",
         "candidate_model_failed_rate_limit", "candidate_trace_incomplete_rate_limit",
@@ -444,17 +454,18 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
         "protocol_strict_comparability", "paired_case_coverage", "paired_trial_coverage",
     }
     unavailable = [rule.name for rule in rules if rule.actual is None]
-    evidence_inconclusive = bool(evidence_inconclusive_rules.intersection(hard_failures) or unavailable)
+    required_unavailable = [rule.name for rule in rules if rule.actual is None and rule.required]
+    evidence_inconclusive = bool(evidence_inconclusive_rules.intersection(hard_failures) or required_unavailable)
     quality_failures = [
         name for name in hard_failures
         if name not in evidence_inconclusive_rules and name not in unavailable
     ]
     inconclusive = evidence_inconclusive and not quality_failures
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "baseline_id": experiment.get("baseline_id"),
         "candidate_id": experiment.get("candidate_id"),
-        "passed": all(rule.passed for rule in rules),
+        "passed": not hard_failures,
         "rules": [rule.as_dict() for rule in rules],
         "diagnostics": _efficiency_diagnostics(comparison, policy),
         "protocol": {
@@ -469,6 +480,10 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
             "average_model_tokens_delta": average_token_delta,
             "token_savings_cannot_offset": token_saving_cannot_offset,
             "message": "inconclusive: evidence is incomplete, unavailable, or not strictly comparable" if inconclusive else decision_message,
+        },
+        "evidence_policy": {
+            "require_cost_evidence": require_cost_evidence,
+            "fingerprint": "sha256:" + hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest(),
         },
         "evidence": {"comparison": comparison},
     }

@@ -5,6 +5,8 @@ const launchButton = document.querySelector("#launch-button");
 const statusLabel = document.querySelector("#run-status");
 const runSummary = document.querySelector("#run-summary");
 const runLog = document.querySelector("#run-log");
+const cancelRunButton = document.querySelector("#cancel-run");
+const resumeRunButton = document.querySelector("#resume-run");
 const savedSetupStatus = document.querySelector("#saved-setup-status");
 const restoreSetupButton = document.querySelector("#restore-setup");
 const forgetSetupButton = document.querySelector("#forget-setup");
@@ -77,12 +79,16 @@ async function request(url, options) { const response = await fetch(url, options
 async function validate() { const result = await request("/api/preflight", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(values())}); renderPreflight(result); return result; }
 function renderRun(run) {
   const status = run.status || "idle"; statusLabel.textContent = status.toUpperCase(); statusLabel.className = `status ${status === "completed" ? "ok" : status === "failed" ? "bad" : "muted"}`;
+  cancelRunButton.hidden = status !== "running";
+  resumeRunButton.hidden = status !== "cancelled";
   runLog.hidden = !(run.logs || []).length; runLog.textContent = (run.logs || []).join("\n");
   if (run.console_url) runSummary.innerHTML = `Artifacts are ready. <a href="${escapeHtml(run.console_url)}" target="_blank" rel="noopener">Open Observability Console →</a>`;
   else if (status === "running") runSummary.textContent = "Experiment is running. This page keeps the latest process output; artifacts will open in the Console when complete.";
   else if (status === "failed") runSummary.textContent = "Experiment setup failed. Review the final output, revise the configuration, then validate again.";
 }
-async function refreshRun() { const run = await request("/api/run"); renderRun(run); if (run.status === "running") setTimeout(refreshRun, 1000); }
+async function refreshRun() { const run = await request("/api/run"); renderRun(run); if (["running", "cancelling"].includes(run.status)) setTimeout(refreshRun, 1000); }
+cancelRunButton.addEventListener("click", async () => { renderRun(await request("/api/run/cancel", {method: "POST"})); refreshRun(); });
+resumeRunButton.addEventListener("click", async () => { renderRun(await request("/api/run/resume", {method: "POST"})); refreshRun(); });
 document.querySelector("#preflight-button").addEventListener("click", event => { event.preventDefault(); validate(); });
 form.addEventListener("change", () => { preflightValid = false; launchButton.disabled = true; });
 form.addEventListener("submit", event => { event.preventDefault(); validate(); });

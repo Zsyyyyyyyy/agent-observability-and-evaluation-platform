@@ -246,3 +246,33 @@ def validate_trace(
         span_count=validation.span_count,
         errors=tuple(errors) + validation.errors,
     )
+
+
+def trace_conformance(events: Iterable[dict[str, Any]], observation_mode: str) -> dict[str, Any]:
+    """校验观测模式承诺的最低 Trace 语义，不把缺失能力伪装成零。"""
+
+    records = list(events)
+    starts = [event for event in records if event.get("kind") == "span_start"]
+    names = {str(event.get("name")) for event in starts}
+    required = {
+        "blackbox": {"agent.run"},
+        "sdk": {"agent.run"},
+        "langgraph": {"agent.run", "workflow"},
+    }
+    errors: list[str] = []
+    if observation_mode not in required:
+        errors.append(f"unsupported observation mode: {observation_mode}")
+    elif "agent.run" not in names:
+        errors.append("missing agent.run root span")
+    elif observation_mode == "langgraph" and not any(name.startswith("workflow.") for name in names):
+        errors.append("langgraph trace requires at least one workflow span")
+    return {
+        "profile": f"{observation_mode}_v1",
+        "valid": not errors,
+        "errors": errors,
+        "observed": {
+            "workflow": any(name.startswith("workflow.") for name in names),
+            "model": any(name in {"model.call", "llm.call"} for name in names),
+            "tool": any(name == "tool.call" for name in names),
+        },
+    }

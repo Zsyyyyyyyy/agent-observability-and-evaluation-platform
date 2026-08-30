@@ -282,6 +282,30 @@ def _paired_statistics(case_comparisons: list[dict[str, Any]], *, resamples: int
     return result
 
 
+def _reliability_confidence(case_comparisons: list[dict[str, Any]], *, resamples: int = 2_000, seed: int = 20_260_813) -> dict[str, Any]:
+    """为 Case 级一致性与 flaky 差异提供聚类 Bootstrap 区间。"""
+
+    values: list[tuple[float, float]] = []
+    for comparison in case_comparisons:
+        baseline = comparison.get("baseline") or {}
+        candidate = comparison.get("candidate") or {}
+        before, after = baseline.get("all_pass_at_k"), candidate.get("all_pass_at_k")
+        if isinstance(before, bool) and isinstance(after, bool):
+            pairs = comparison.get("paired_trials") or []
+            baseline_flaky = any(not item.get("baseline", {}).get("valid_pass") for item in pairs) and any(item.get("baseline", {}).get("valid_pass") for item in pairs)
+            candidate_flaky = any(not item.get("candidate", {}).get("valid_pass") for item in pairs) and any(item.get("candidate", {}).get("valid_pass") for item in pairs)
+            values.append((float(after) - float(before), float(candidate_flaky) - float(baseline_flaky)))
+    if not values:
+        return {"method": "clustered_case_bootstrap", "confidence_level": 0.95, "eligible_case_count": 0, "metrics": {}, "conclusion": "not_available"}
+    rng = Random(seed)
+    metrics: dict[str, Any] = {}
+    for index, name in enumerate(("all_pass_at_k_delta", "flaky_case_rate_delta")):
+        samples = [mean(rng.choice(values)[index] for _ in values) for _ in range(resamples)]
+        low, high = _percentile(samples, 0.025), _percentile(samples, 0.975)
+        metrics[name] = {"point_estimate": mean(value[index] for value in values), "ci95": {"low": low, "high": high}, "available": True}
+    return {"method": "clustered_case_bootstrap", "confidence_level": 0.95, "resamples": resamples, "seed": seed, "eligible_case_count": len(values), "metrics": metrics, "conclusion": "limited_coverage" if len(values) < 8 else "available"}
+
+
 def compare_summaries(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -332,7 +356,7 @@ def compare_summaries(
         "candidate": candidate_metrics,
         "delta": deltas,
         "classification": classifications,
-        "reliability": {"baseline": baseline_reliability, "candidate": candidate_reliability, "delta": reliability_delta},
+        "reliability": {"baseline": baseline_reliability, "candidate": candidate_reliability, "delta": reliability_delta, "confidence": _reliability_confidence(case_comparisons)},
         "efficiency": {
             "baseline": {key: baseline_metrics[key] for key in ("p50_duration_ms", "p95_duration_ms", "p50_model_tokens", "p95_model_tokens")},
             "candidate": {key: candidate_metrics[key] for key in ("p50_duration_ms", "p95_duration_ms", "p50_model_tokens", "p95_model_tokens")},

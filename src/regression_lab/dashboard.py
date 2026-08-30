@@ -10,6 +10,7 @@ from typing import Any
 from regression_lab.behavior import aggregate_behavior, summarize_trial_behavior
 from regression_lab.behavior_diff import snapshot_trial_behavior
 from regression_lab.evolution_catalog import EvolutionCatalog
+from regression_lab.trace_diff import compare_traces
 
 
 def _observed_number(value: object) -> int | float | None:
@@ -104,6 +105,23 @@ class DashboardRepository:
                 if isinstance(event, dict):
                     events.append(event)
         return {"result": result, "trace": events}
+
+    def trace_diff(self, baseline_id: str, candidate_id: str) -> dict[str, Any] | None:
+        """比较两个已选 Trial 的 Trace，不回读或改变任何运行证据。"""
+
+        baseline, candidate = self.trial(baseline_id), self.trial(candidate_id)
+        if baseline is None or candidate is None:
+            return None
+        diff = compare_traces(baseline["trace"], candidate["trace"])
+        failure = {
+            "baseline": (baseline["result"].get("failure_attribution") or {}).get("failure_span"),
+            "candidate": (candidate["result"].get("failure_attribution") or {}).get("failure_span"),
+        }
+        diff["failure_alignment"] = {**failure, "aligned": any(
+            row["kind"] == "matched" and row["baseline"]["span_id"] == failure["baseline"] and row["candidate"]["span_id"] == failure["candidate"]
+            for row in diff["rows"] if row["baseline"] and row["candidate"]
+        )}
+        return diff
 
     def policy_stop_evidence(self) -> dict[str, Any]:
         """Summarize the V4.1 verification-stop invariant from selected Traces.

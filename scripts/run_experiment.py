@@ -338,6 +338,11 @@ def _run_execution_plan(
         for item in protocol.get("agents", [])
         if isinstance(item, dict)
     }
+    expected_environment_by_label = {
+        item.get("label"): (item.get("runtime_environment") or {}).get("identity_hash")
+        for item in protocol.get("agents", [])
+        if isinstance(item, dict) and isinstance(item.get("runtime_environment"), dict)
+    }
     uses_external_command = external_command is not None or external_arm_configs is not None
     for entry in execution_plan["entries"]:
         agent_label = entry["agent_label"]
@@ -374,6 +379,9 @@ def _run_execution_plan(
         expected_source = expected_source_by_label.get(agent_label)
         if uses_external_command and isinstance(expected_source, str):
             command.extend(["--expected-agent-source-hash", expected_source])
+        expected_environment = expected_environment_by_label.get(agent_label)
+        if uses_external_command and isinstance(expected_environment, str):
+            command.extend(["--expected-runtime-environment-hash", expected_environment])
         if args.trials:
             command.extend(["--trials", str(args.trials)])
         if args.replay_source:

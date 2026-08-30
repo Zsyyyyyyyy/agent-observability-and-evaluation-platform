@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -23,6 +24,8 @@ from regression_lab.agent_spec import AgentSpecError
 from regression_lab.git_sources import GitSourceError, GitSourcePlan, GitSourceSnapshots, create_git_source_snapshots, entry_exists, inspect_git_sources, module_exists
 from regression_lab.manifest import ManifestError, load_manifest, validate_manifest
 from regression_lab.paths import asset_path, asset_root, is_source_checkout, runtime_root
+from regression_lab.artifacts import write_json_atomically
+from regression_lab.runner import terminate_process_group
 from scripts.regression_lab import _console_port, _validate_experiment_specs
 
 
@@ -42,6 +45,7 @@ class StudioRun:
     returncode: int | None = None
     logs: list[str] = field(default_factory=list)
     source_snapshots: GitSourceSnapshots | None = None
+    request: dict[str, object] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -302,7 +306,29 @@ def command_for(request: dict[str, object]) -> list[str]:
         command.extend(["--benchmark", str(manifest)])
     if request.get("execution_mode") == "trusted_host":
         command.append("--unsafe-trusted-host")
+    runtime = request.get("studio_runtime")
+    if isinstance(runtime, str):
+        command.extend(["--output-dir", runtime])
+    if request.get("resume") is True:
+        command.append("--resume")
     return command
+
+
+def _run_state(runtime: str | None, status: str) -> None:
+    if not runtime:
+        return
+    root = Path(runtime)
+    root.mkdir(parents=True, exist_ok=True)
+    write_json_atomically(root / "experiment-state.json", {"schema_version": 1, "status": status, "updated_at": datetime.now(timezone.utc).isoformat()})
+
+
+def _runtime_for(request: dict[str, object]) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    project = str(request.get("project_id") or "studio")
+    agent = str(request.get("agent_id") or "agent")
+    baseline = str(request.get("baseline_version") or "baseline")
+    candidate = str(request.get("candidate_version") or "candidate")
+    return str(runtime_root() / "projects" / project / "experiments" / f"{agent}-{baseline}-vs-{candidate}-{stamp}")
 
 
 def _read_run_output(run: StudioRun) -> None:
@@ -317,8 +343,9 @@ def _read_run_output(run: StudioRun) -> None:
     returncode = run.process.wait()
     with run.lock:
         run.returncode = returncode
-        run.status = "completed" if returncode in {0, 1} else "failed"
+        run.status = "completed" if returncode in {0, 1} else "cancelled" if returncode < 0 else "failed"
         runtime = run.runtime
+    _run_state(runtime, run.status)
     try:
         if runtime and Path(runtime).is_dir():
             port = _console_port(None)
@@ -378,6 +405,38 @@ def handler_for(static_root: Path, run: StudioRun):
             path = urlparse(self.path).path
             request = self._request_body()
             if path == "/api/preflight": return self._json(preflight(request))
+            if path == "/api/run/cancel":
+                with run.lock:
+                    process = run.process
+                    if process is None or process.poll() is not None:
+                        return self._json({"error": "没有正在运行的 Experiment"}, HTTPStatus.CONFLICT)
+                    run.status = "cancelling"
+                    _run_state(run.runtime, "cancelling")
+                terminate_process_group(process, grace_seconds=5)
+                return self._json(run_status(run), HTTPStatus.ACCEPTED)
+            if path == "/api/run/resume":
+                with run.lock:
+                    previous, runtime = dict(run.request or {}), run.runtime
+                    active = run.process is not None and run.process.poll() is None
+                if active or not previous or not runtime:
+                    return self._json({"error": "没有可恢复的已取消 Experiment"}, HTTPStatus.CONFLICT)
+                try:
+                    prepared, snapshots = _prepared_request_with_snapshots(previous)
+                except (ValueError, AgentSpecError, GitSourceError) as exc:
+                    return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
+                prepared = {**prepared, "studio_runtime": runtime, "resume": True}
+                try:
+                    process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+                except OSError:
+                    if snapshots:
+                        snapshots.cleanup()
+                    raise
+                with run.lock:
+                    run.process, run.source_snapshots = process, snapshots
+                    run.status, run.returncode, run.logs = "running", None, []
+                    _run_state(runtime, "running")
+                    threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+                return self._json(run_status(run), HTTPStatus.ACCEPTED)
             if path != "/api/run": return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             checked = preflight(request)
             if not checked["valid"]:
@@ -395,14 +454,17 @@ def handler_for(static_root: Path, run: StudioRun):
                     if snapshots:
                         snapshots.cleanup()
                     return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
+                runtime = _runtime_for(request)
+                prepared = {**prepared, "studio_runtime": runtime}
                 try:
-                    run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
                 except OSError:
                     if snapshots:
                         snapshots.cleanup()
                     raise
-                run.source_snapshots = snapshots
-                run.status, run.runtime, run.console_url, run.returncode, run.logs = "running", None, None, None, []
+                run.source_snapshots, run.request = snapshots, request
+                run.status, run.runtime, run.console_url, run.returncode, run.logs = "running", runtime, None, None, []
+                _run_state(runtime, "running")
                 threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
             return self._json(run_status(run), HTTPStatus.ACCEPTED)
 

@@ -22,6 +22,7 @@ from typing import Any, Iterable
 from regression_lab.artifacts import write_json_atomically
 
 
+# 字段为可选扩展，保留 v2 版本号以便既有 Artifact 和离线验证保持兼容。
 PROTOCOL_SCHEMA_VERSION = 2
 DEFAULT_SCHEDULE_SEED = 20260813
 _SENSITIVE_KEY = re.compile(r"(?:api[_.-]?key|authorization|secret|token|password)", re.IGNORECASE)
@@ -139,6 +140,32 @@ def agent_source_snapshot(command: Iterable[str], source_root: str | Path | None
     }
 
 
+def runtime_environment_identity(interpreter: str | None = None) -> dict[str, object]:
+    """返回可比较但不泄漏本机路径或依赖清单的运行环境身份。"""
+
+    executable = interpreter or sys.executable
+    probe = (
+        "import hashlib,json,platform,sys; from importlib import metadata; "
+        "packages=sorted(f'{d.metadata[\"Name\"] or d.name}=={d.version}' "
+        "for d in metadata.distributions()); "
+        "print(json.dumps({'python':platform.python_version(),'implementation':platform.python_implementation(),"
+        "'system':platform.system(),'machine':platform.machine(),"
+        "'dependency_hash':'sha256:'+hashlib.sha256('\\n'.join(packages).encode()).hexdigest(),"
+        "'dependency_count':len(packages)}))"
+    )
+    try:
+        completed = subprocess.run(
+            [executable, "-I", "-c", probe], capture_output=True, text=True, check=True, timeout=8,
+        )
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return {"available": False, "identity_hash": None}
+    if not isinstance(identity, dict):
+        return {"available": False, "identity_hash": None}
+    payload = {key: identity.get(key) for key in ("python", "implementation", "system", "machine", "dependency_hash", "dependency_count")}
+    return {"available": True, **payload, "identity_hash": sha256_text(canonical_json(payload))}
+
+
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -242,6 +269,8 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
         snapshot = agent_snapshots.get(item["id"])
         source_hash = snapshot.get("agent_source_hash") if isinstance(snapshot, dict) else None
         entrypoint_hash = snapshot.get("entrypoint_hash") if isinstance(snapshot, dict) else None
+        command = snapshot.get("normalized_command") if isinstance(snapshot, dict) else None
+        interpreter = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
         protocol_agents.append({
             "label": item["id"], "version": item["version"], "adapter": adapter,
             "agent_source_hash": source_hash if isinstance(source_hash, str) else entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
@@ -253,6 +282,7 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
             # AgentSpec is the A/B identity evidence.  The command bridge is
             # only an execution detail and must not become that identity.
             **({"agent_spec_snapshot": snapshot} if isinstance(snapshot, dict) else {}),
+            "runtime_environment": runtime_environment_identity(interpreter) if interpreter else None,
         })
     protocol: dict[str, Any] = {
         "schema_version": PROTOCOL_SCHEMA_VERSION,

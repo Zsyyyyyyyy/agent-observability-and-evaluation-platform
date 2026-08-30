@@ -215,6 +215,7 @@ def _build_trial_spec(
         "protocol_fingerprint": args.protocol_fingerprint,
         "schedule_index": args.schedule_index,
         "expected_agent_source_hash": args.expected_agent_source_hash,
+        "expected_runtime_environment_hash": args.expected_runtime_environment_hash,
     }
     if external_command is not None:
         spec["external_command"] = external_command
@@ -309,6 +310,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="external-command evidence mode; sdk remains the legacy default",
     )
     parser.add_argument("--expected-agent-source-hash", help="frozen external Agent entry-point hash from the Experiment Protocol")
+    parser.add_argument("--expected-runtime-environment-hash", help="frozen external Agent runtime environment identity hash")
     parser.add_argument("--resume", action="store_true", help="reuse completed jobs and rerun incomplete jobs")
     parser.add_argument(
         "--rerun-invalid",

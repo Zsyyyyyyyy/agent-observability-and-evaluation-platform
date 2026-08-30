@@ -23,6 +23,7 @@ from regression_lab.gate import evaluate_gate
 from regression_lab.integrity import verify_experiment_runtime
 from regression_lab.protocol import write_json_atomically
 from regression_lab.paths import asset_path, asset_root, runtime_root
+from regression_lab.schema import trace_conformance, validate_trace
 
 
 def _validate_agent(path: str) -> int:
@@ -255,7 +256,8 @@ def _print_experiment(runtime: Path, report: dict[str, object] | None, gate: dic
 
 
 def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[str], trials: int,
-                    unsafe_trusted_host: bool, *, open_console: bool, port: int | None) -> int:
+                    unsafe_trusted_host: bool, *, open_console: bool, port: int | None,
+                    output_dir: str | None = None, resume: bool = False) -> int:
     try:
         baseline, candidate = _validate_experiment_specs(baseline_path, candidate_path)
     except AgentSpecError as exc:
@@ -264,7 +266,7 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
     root = asset_root()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     assert baseline.project_id is not None
-    runtime = runtime_root() / "projects" / baseline.project_id / "experiments" / f"{baseline.agent_id}-{baseline.version}-vs-{candidate.version}-{stamp}"
+    runtime = Path(output_dir).resolve() if output_dir else runtime_root() / "projects" / baseline.project_id / "experiments" / f"{baseline.agent_id}-{baseline.version}-vs-{candidate.version}-{stamp}"
     arm_configs = {
         "baseline": {**baseline.as_external_command_config(), "agent_spec_snapshot": baseline.snapshot()},
         "candidate": {**candidate.as_external_command_config(), "agent_spec_snapshot": candidate.snapshot()},
@@ -277,6 +279,8 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
     ]
     for benchmark in benchmarks:
         command.extend(["--manifest", str(Path(benchmark).resolve())])
+    if resume:
+        command.append("--resume")
     command.append("--unsafe-trusted-host" if unsafe_trusted_host else "--docker")
     completed = subprocess.run(command, cwd=root, text=True, capture_output=True, check=False)
     report = _load_json(runtime / "experiment.json")
@@ -302,6 +306,25 @@ def _verify_experiment(runtime: str) -> int:
     report = verify_experiment_runtime(runtime)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["valid"] else 1
+
+
+def _verify_trace(path: str, observation_mode: str) -> int:
+    """提供独立 Trace 契约检查，便于接入方在启动 Experiment 前自检。"""
+
+    trace_path = Path(path)
+    validation = validate_trace(trace_path).as_dict()
+    events = []
+    if trace_path.is_file():
+        for line in trace_path.read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                events.append(record)
+    conformance = trace_conformance(events, observation_mode)
+    print(json.dumps({"validation": validation, "conformance": conformance}, ensure_ascii=False, indent=2))
+    return 0 if validation["valid"] and conformance["valid"] else 1
 
 
 def _start_studio(port: int | None, *, no_open: bool, data_dir: str | None) -> int:
@@ -407,10 +430,17 @@ def main() -> int:
     run.add_argument("--unsafe-trusted-host", action="store_true", help="run platform tests on this trusted host instead of Docker")
     run.add_argument("--open", action="store_true", help="open the read-only Console after the Experiment completes")
     run.add_argument("--port", type=int, help="Console port used with --open")
+    run.add_argument("--output-dir", help="reuse a known Experiment Runtime directory")
+    run.add_argument("--resume", action="store_true", help="rerun only incomplete Trials in --output-dir")
     verify = experiment_commands.add_parser(
         "verify", help="verify Protocol, schedule, selected Attempts, Traces, and Gate linkage"
     )
     verify.add_argument("--runtime", required=True, help="completed Experiment Runtime directory")
+    trace = commands.add_parser("trace", help="verify one persisted Trace contract")
+    trace_commands = trace.add_subparsers(dest="trace_command", required=True)
+    trace_verify = trace_commands.add_parser("verify", help="validate structural and observation-mode Trace conformance")
+    trace_verify.add_argument("--path", required=True, help="Trace JSONL path")
+    trace_verify.add_argument("--observation-mode", choices=("blackbox", "sdk", "langgraph"), required=True)
     console = commands.add_parser("console", help="serve a read-only Console for an existing runtime")
     console.add_argument("--runtime", required=True, help="Experiment or Trial runtime directory")
     console.add_argument("--port", type=int, help="Console port; defaults to the first free port from 8765")
@@ -427,9 +457,11 @@ def main() -> int:
         return _smoke_agent(args.spec, args.benchmark, args.unsafe_trusted_host, open_console=args.open, port=args.port)
     if args.command == "experiment" and args.experiment_command == "run":
         return _run_experiment(args.baseline, args.candidate, args.benchmark, args.trials, args.unsafe_trusted_host,
-                               open_console=args.open, port=args.port)
+                               open_console=args.open, port=args.port, output_dir=args.output_dir, resume=args.resume)
     if args.command == "experiment" and args.experiment_command == "verify":
         return _verify_experiment(args.runtime)
+    if args.command == "trace" and args.trace_command == "verify":
+        return _verify_trace(args.path, args.observation_mode)
     if args.command == "console":
         return _serve_console(Path(args.runtime).resolve(), args.port)
     parser.error("unsupported command")
