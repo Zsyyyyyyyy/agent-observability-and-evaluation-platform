@@ -1,4 +1,4 @@
-# Regression Lab v1.2
+# Regression Lab
 
 **Framework-neutral Agent regression evaluation and observability platform for reproducible version comparison.**
 
@@ -73,20 +73,20 @@ Regression Lab 不负责规划、记忆、工具编排或替代 Agent Runtime。
 普通使用者不需要克隆仓库、创建虚拟环境或编写 YAML。macOS/Linux 上安装 [uv](https://docs.astral.sh/uv/) 后直接运行：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0" regression-lab start
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2" regression-lab start
 ```
 
 命令会启动并打开本机 Studio。它只监听 `127.0.0.1`；运行记录和 Studio 自动生成的 AgentSpec 默认保存到 `~/.regression-lab/`，不会写入安装目录。第一次只想确认环境可运行时：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0" regression-lab doctor
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0" regression-lab demo
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2" regression-lab doctor
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2" regression-lab demo
 ```
 
 `demo` 是完全离线、只读的公开演示，不调用模型、不执行外部 Agent。需要长期安装则使用：
 
 ```bash
-uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0"
+uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2"
 regression-lab start
 ```
 
@@ -122,7 +122,7 @@ make offline-demo
 4. `Trace structure → Tree`：按 `parent_span_id` 展开 Span；
 5. `Git diff`：平台独立采集的最终修改证据。
 
-`make verify` 会运行 222 项离线测试、所有 Benchmark Manifest 校验、Python 编译检查、前端语法检查、两个离线 Demo 的文件摘要检查和 Git 差异检查。Docker 可用时再运行：
+`make verify` 会运行完整离线测试套件、所有 Benchmark Manifest 校验、Python 编译检查、前端语法检查、两个离线 Demo 的文件摘要检查和 Git 差异检查。Docker 可用时再运行：
 
 ```bash
 make docker-test
@@ -243,7 +243,7 @@ PYTHONPATH=src:. python3.11 scripts/run_benchmark.py \
 
 ## v1.3 工程边界
 
-当前版本为 **v1.3.0**，定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。在 v1.2 基础上，进一步稳定实现：
+当前 v1.3 系列定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。在此前版本基础上，进一步稳定实现：
 
 - 无 YAML 的 Studio 双版本实验；
 - Trace 树、Comparison、Failure Attribution 和 Gate；
