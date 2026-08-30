@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from regression_lab.schema import validate_trace
+from regression_lab.schema import trace_conformance, validate_trace
 from regression_lab_observer.langgraph import LangGraphObserver
 
 
@@ -62,6 +62,27 @@ class LangGraphObserverTests(unittest.TestCase):
             validation = validate_trace(root / "trace.jsonl", expected_trace_id="trace_langgraph", expected_trial_id="trial_langgraph")
             self.assertTrue(validation.valid, validation.errors)
             self.assertFalse(status["complete"])
+
+    def test_parallel_streaming_and_async_callback_shapes_preserve_parentage(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.dict(os.environ, self._environment(root), clear=False):
+                with LangGraphObserver.from_environment() as observation:
+                    callback = observation.callback
+                    callback.on_chain_start({}, {}, run_id="planner", metadata={"langgraph_node": "Planner"})
+                    callback.on_chain_start({}, {}, run_id="coder", metadata={"langgraph_node": "Coder"})
+                    callback.on_chat_model_start({"kwargs": {"model": "fixture"}}, [], run_id="model-a", parent_run_id="planner")
+                    callback.on_chat_model_start({"kwargs": {"model": "fixture"}}, [], run_id="model-b", parent_run_id="coder")
+                    callback.on_llm_new_token("streamed token", run_id="model-a")
+                    callback.on_llm_end({"usage_metadata": {"input_tokens": 2, "output_tokens": 1}}, run_id="model-a")
+                    callback.on_llm_error(RuntimeError("provider"), run_id="model-b")
+                    callback.on_chain_end({}, run_id="planner")
+                    callback.on_chain_error(RuntimeError("node"), run_id="coder")
+            events = [json.loads(line) for line in (root / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+            validation = validate_trace(root / "trace.jsonl", expected_trace_id="trace_langgraph", expected_trial_id="trial_langgraph")
+            self.assertTrue(validation.valid, validation.errors)
+            self.assertTrue(trace_conformance(events, "langgraph")["valid"])
+            self.assertNotIn("streamed token", json.dumps(events))
 
 
 if __name__ == "__main__":

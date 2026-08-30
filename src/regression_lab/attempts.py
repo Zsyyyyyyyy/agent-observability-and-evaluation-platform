@@ -33,7 +33,7 @@ def terminal_status_from_result(result: dict[str, Any]) -> str:
 
     if result.get("status") == "timed_out":
         return "timed_out"
-    if result.get("status") == "trace_incomplete":
+    if result.get("status") in {"trace_incomplete", "environment_mismatch"}:
         return "invalid"
     return "completed"
 

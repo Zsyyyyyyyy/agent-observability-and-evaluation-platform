@@ -73,20 +73,20 @@ Regression Lab 不负责规划、记忆、工具编排或替代 Agent Runtime。
 普通使用者不需要克隆仓库、创建虚拟环境或编写 YAML。macOS/Linux 上安装 [uv](https://docs.astral.sh/uv/) 后直接运行：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0" regression-lab start
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0" regression-lab start
 ```
 
 命令会启动并打开本机 Studio。它只监听 `127.0.0.1`；运行记录和 Studio 自动生成的 AgentSpec 默认保存到 `~/.regression-lab/`，不会写入安装目录。第一次只想确认环境可运行时：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0" regression-lab doctor
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0" regression-lab demo
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0" regression-lab doctor
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0" regression-lab demo
 ```
 
 `demo` 是完全离线、只读的公开演示，不调用模型、不执行外部 Agent。需要长期安装则使用：
 
 ```bash
-uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.2.0"
+uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.0"
 regression-lab start
 ```
 
@@ -241,15 +241,18 @@ PYTHONPATH=src:. python3.11 scripts/run_benchmark.py \
 
 要评测自己的项目，请准备基线 Fixture、Case Manifest 和两个 Agent 版本，按 [Using Your Agent](docs/USING_YOUR_AGENT.md) 执行。平台会为每个 Attempt 复制 Fixture、初始化独立临时 Git 仓库并在其中运行 Trial，不会修改用户原始项目。主执行链没有调用 `git worktree add`，面试或文档中不应把它描述成 Git Worktree 隔离。
 
-## v1.2 工程边界
+## v1.3 工程边界
 
-当前版本为 **v1.2.0**，定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。已稳定实现：
+当前版本为 **v1.3.0**，定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。在 v1.2 基础上，进一步稳定实现：
 
 - 无 YAML 的 Studio 双版本实验；
 - Trace 树、Comparison、Failure Attribution 和 Gate；
 - 不可变 Attempt 与 Experiment Artifact Verify；
 - 默认最小外部 Agent 环境；
 - 可校验的离线 Demo。
+- Runtime Environment Identity、证据来源策略与 LangGraph Trace Conformance。
+- 同步双列 Trace Diff、首个结构分叉、关键路径和失败 Span 对齐。
+- Studio 取消、原 Runtime 恢复，以及 Studio 重启后的已取消实验发现。
 
 其中 Capability 明确区分 `available`、`supported_but_not_observed` 和 `unsupported`；未支持或未观测到的证据不会显示为 `0`。Behavior Diff 与 Failure Attribution 都是 diagnostic，不直接改变 Gate。v1.0 契约冻结仍是未来目标，不把当前项目过度描述为生产级平台。
 

@@ -314,12 +314,37 @@ def command_for(request: dict[str, object]) -> list[str]:
     return command
 
 
-def _run_state(runtime: str | None, status: str) -> None:
+def _run_state(runtime: str | None, status: str, request: dict[str, object] | None = None) -> None:
     if not runtime:
         return
     root = Path(runtime)
     root.mkdir(parents=True, exist_ok=True)
-    write_json_atomically(root / "experiment-state.json", {"schema_version": 1, "status": status, "updated_at": datetime.now(timezone.utc).isoformat()})
+    payload = {"schema_version": 1, "status": status, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if request is not None:
+        # Studio 请求只包含路径、版本和执行选项；不保存模型密钥或 Agent 环境变量。
+        payload["request"] = request
+    elif (root / "experiment-state.json").is_file():
+        try:
+            previous = json.loads((root / "experiment-state.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        if isinstance(previous.get("request"), dict):
+            payload["request"] = previous["request"]
+    write_json_atomically(root / "experiment-state.json", payload)
+
+
+def recoverable_runs() -> list[dict[str, str]]:
+    """发现 Studio 重启后遗留的已取消实验；只暴露本地 Runtime 身份。"""
+
+    rows = []
+    for state_path in runtime_root().glob("projects/*/experiments/*/experiment-state.json"):
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if state.get("status") == "cancelled" and isinstance(state.get("request"), dict):
+            rows.append({"runtime": str(state_path.parent), "updated_at": str(state.get("updated_at", ""))})
+    return sorted(rows, key=lambda row: row["updated_at"], reverse=True)
 
 
 def _runtime_for(request: dict[str, object]) -> str:
@@ -397,6 +422,7 @@ def handler_for(static_root: Path, run: StudioRun):
         def do_GET(self) -> None:
             path = urlparse(self.path).path
             if path == "/api/catalog": return self._json({"benchmarks": benchmark_catalog(), "max_trials": MAX_TRIALS, "python_executable": sys.executable})
+            if path == "/api/recoveries": return self._json({"runs": recoverable_runs()})
             if path == "/api/run": return self._json(run_status(run))
             if path == "/": self.path = "/studio.html"
             return super().do_GET()
@@ -437,6 +463,42 @@ def handler_for(static_root: Path, run: StudioRun):
                     _run_state(runtime, "running")
                     threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
                 return self._json(run_status(run), HTTPStatus.ACCEPTED)
+            if path == "/api/run/recover":
+                if not isinstance(request, dict) or not isinstance(request.get("runtime"), str):
+                    return self._json({"error": "Runtime 路径无效"}, HTTPStatus.UNPROCESSABLE_ENTITY)
+                root = Path(request["runtime"]).resolve()
+                state_path = root / "experiment-state.json"
+                if not state_path.is_relative_to(runtime_root()) or not state_path.is_file():
+                    return self._json({"error": "Runtime 不属于当前平台目录"}, HTTPStatus.UNPROCESSABLE_ENTITY)
+                try:
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    return self._json({"error": "Runtime 状态不可读取"}, HTTPStatus.UNPROCESSABLE_ENTITY)
+                previous = state.get("request")
+                if state.get("status") != "cancelled" or not isinstance(previous, dict):
+                    return self._json({"error": "Runtime 不可恢复"}, HTTPStatus.CONFLICT)
+                # 复用下方 resume 流程所需的内存状态；源码快照会重新创建并由协议校验。
+                with run.lock:
+                    if run.process is not None and run.process.poll() is None:
+                        return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
+                    run.request, run.runtime = previous, str(root)
+                try:
+                    prepared, snapshots = _prepared_request_with_snapshots(previous)
+                except (ValueError, AgentSpecError, GitSourceError) as exc:
+                    return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
+                prepared = {**prepared, "studio_runtime": str(root), "resume": True}
+                try:
+                    process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+                except OSError:
+                    if snapshots:
+                        snapshots.cleanup()
+                    raise
+                with run.lock:
+                    run.process, run.source_snapshots = process, snapshots
+                    run.status, run.returncode, run.logs = "running", None, []
+                    _run_state(str(root), "running", previous)
+                    threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+                return self._json(run_status(run), HTTPStatus.ACCEPTED)
             if path != "/api/run": return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             checked = preflight(request)
             if not checked["valid"]:
@@ -464,7 +526,7 @@ def handler_for(static_root: Path, run: StudioRun):
                     raise
                 run.source_snapshots, run.request = snapshots, request
                 run.status, run.runtime, run.console_url, run.returncode, run.logs = "running", runtime, None, None, []
-                _run_state(runtime, "running")
+                _run_state(runtime, "running", request)
                 threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
             return self._json(run_status(run), HTTPStatus.ACCEPTED)
 

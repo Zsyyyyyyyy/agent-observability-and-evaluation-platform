@@ -87,6 +87,7 @@ function renderRun(run) {
   else if (status === "failed") runSummary.textContent = "Experiment setup failed. Review the final output, revise the configuration, then validate again.";
 }
 async function refreshRun() { const run = await request("/api/run"); renderRun(run); if (["running", "cancelling"].includes(run.status)) setTimeout(refreshRun, 1000); }
+async function loadRecoveries() { const response=await request("/api/recoveries"); const runs=response.runs||[], panel=document.querySelector("#recovery-runs"); panel.hidden=!runs.length; panel.innerHTML=runs.length?`<b>Recover cancelled Experiment</b>${runs.map(run=>`<p><code>${escapeHtml(run.runtime)}</code> · ${escapeHtml(run.updated_at)} <button type="button" data-recover="${escapeHtml(run.runtime)}">Resume incomplete Trials</button></p>`).join("")}`:""; document.querySelectorAll("[data-recover]").forEach(button=>button.addEventListener("click",async()=>{renderRun(await request("/api/run/recover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runtime:button.dataset.recover})})); panel.hidden=true; refreshRun();})); }
 cancelRunButton.addEventListener("click", async () => { renderRun(await request("/api/run/cancel", {method: "POST"})); refreshRun(); });
 resumeRunButton.addEventListener("click", async () => { renderRun(await request("/api/run/resume", {method: "POST"})); refreshRun(); });
 document.querySelector("#preflight-button").addEventListener("click", event => { event.preventDefault(); validate(); });
@@ -140,3 +141,4 @@ syncSourceMode();
 syncObservationMode();
 updateSavedSetupStatus();
 refreshRun();
+loadRecoveries().catch(() => {});

@@ -259,6 +259,7 @@ def _evidence_provenance(observation_mode: str) -> dict[str, str]:
         "process_lifecycle": "platform_observed",
         "test_result": "platform_observed",
         "git_evidence": "platform_observed",
+        "runtime_environment": "platform_observed",
         "trace": trace_origin,
         "model_usage": trace_origin if observation_mode != "blackbox" else "not_observed",
         "tool_trace": trace_origin if observation_mode != "blackbox" else "not_observed",
@@ -427,7 +428,10 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
                 if trace_kind:
                     result["model_failure"] = {"kind": trace_kind}
         result["behavior"] = summarize_trial_behavior(result)
-        if result["status"] == "completed" and (not result["trace_validation"]["valid"] or not result["trace_conformance"]["valid"] or not result["runtime_environment_matches_protocol"]):
+        if result["status"] == "completed" and not result["runtime_environment_matches_protocol"]:
+            # 环境身份与 Trace 完整性是两类证据；混为 trace_incomplete 会误导故障归因。
+            result.update({"status": "environment_mismatch", "error": "runtime environment does not match frozen protocol"})
+        elif result["status"] == "completed" and (not result["trace_validation"]["valid"] or not result["trace_conformance"]["valid"]):
             result.update({"status": "trace_incomplete", "error": "trace validation failed"})
         result["evaluation"] = evaluate_baseline(
             result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),

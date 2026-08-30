@@ -70,6 +70,7 @@ def _metrics(summary: dict[str, Any]) -> dict[str, float | None]:
     tests = sum(bool(job.get("test_passed")) for job in jobs)
     model_failed = sum(job.get("status") == "model_failed" for job in jobs)
     trace_incomplete = sum(job.get("status") == "trace_incomplete" for job in jobs)
+    environment_mismatch = sum(job.get("status") == "environment_mismatch" for job in jobs)
     infra_failed = sum(job.get("status") == "infra_failed" for job in jobs)
     path_violations = sum(job.get("path_policy_passed") is False for job in jobs)
     diff_violations = sum(job.get("diff_policy_violated") is True for job in jobs)
@@ -83,6 +84,7 @@ def _metrics(summary: dict[str, Any]) -> dict[str, float | None]:
         "test_pass_rate": tests / count,
         "model_failed_rate": model_failed / count,
         "trace_incomplete_rate": trace_incomplete / count,
+        "environment_mismatch_rate": environment_mismatch / count,
         "infra_failed_rate": infra_failed / count,
         "path_policy_violation_rate": path_violations / count,
         "diff_policy_violation_rate": diff_violations / count,
@@ -333,7 +335,7 @@ def compare_summaries(
         classifications[bucket].append(key)
     for key in (
         "avg_tool_calls", "avg_duration_ms", "avg_model_tokens",
-        "model_failed_rate", "trace_incomplete_rate", "infra_failed_rate",
+        "model_failed_rate", "trace_incomplete_rate", "environment_mismatch_rate", "infra_failed_rate",
         "path_policy_violation_rate", "diff_policy_violation_rate",
     ):
         delta = deltas.get(key)

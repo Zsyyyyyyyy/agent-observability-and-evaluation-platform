@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _prepared_request, _prepared_request_with_snapshots, command_for, handler_for, main, preflight
+from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _prepared_request, _prepared_request_with_snapshots, _run_state, command_for, handler_for, main, preflight, recoverable_runs
 
 
 class RunStudioTests(unittest.TestCase):
@@ -190,6 +190,13 @@ class RunStudioTests(unittest.TestCase):
             handler.log_message('"GET /api/run HTTP/1.1" 200 -')
 
         parent.assert_not_called()
+
+    def test_cancelled_runtime_is_discoverable_after_studio_restart(self):
+        with TemporaryDirectory() as directory, mock.patch("scripts.serve_studio.runtime_root", return_value=Path(directory)):
+            runtime = Path(directory) / "projects" / "project" / "experiments" / "run"
+            _run_state(str(runtime), "cancelled", {"launch_mode": "quick", "project_id": "project"})
+            recovered = recoverable_runs()
+        self.assertEqual(recovered[0]["runtime"], str(runtime))
 
     def test_preflight_rejects_unknown_benchmark_and_out_of_range_trials(self):
         result = preflight({"benchmarks": ["outside.yaml"], "trials": 99})

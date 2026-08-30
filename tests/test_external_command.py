@@ -300,6 +300,24 @@ class ExternalCommandAdapterTests(unittest.TestCase):
         self.assertEqual(result["process_lifecycle"]["return_code"], 7)
         self.assertTrue(result["trace_validation"]["valid"])
 
+    def test_runtime_environment_mismatch_is_not_reported_as_trace_failure(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = self._worktree(root)
+            agent = root / "agent.py"
+            agent.write_text("import os\nfrom pathlib import Path\nPath(os.environ['REGRESSION_WORKTREE'], 'calculator.py').write_text(\"def calculate(value):\\n    return 0 if value == '' else int(value) + 1\\n\", encoding='utf-8')\n", encoding="utf-8")
+            result = run_trial({
+                "trial_id": "environment_mismatch_001", "case_id": "calculator_empty", "agent_version": "blackbox-v1",
+                "adapter": {}, "external_command": [sys.executable, str(agent)], "worktree": str(worktree),
+                "trace_output": str(root / "trace.jsonl"), "result_output": str(root / "result.json"), "test_command": f"{sys.executable} -m unittest test_calculator.py", "sandbox": None,
+                "allowed_paths": ["calculator.py", "__pycache__/**"], "forbidden_paths": [], "allowed_tools": [], "denied_tools": [], "budget": {},
+                "observation_mode": "blackbox", "adapter_capabilities": self.BLACKBOX_CAPABILITIES,
+                "expected_runtime_environment_hash": "sha256:wrong",
+            })
+        self.assertEqual(result["status"], "environment_mismatch")
+        self.assertTrue(result["trace_validation"]["valid"])
+        self.assertFalse(result["runtime_environment_matches_protocol"])
+
     def test_blackbox_timeout_uses_existing_process_group_cleanup_and_closes_trace(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

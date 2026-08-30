@@ -27,7 +27,7 @@ EXPERIMENT_STATUSES = {"planned", "running", "completed", "failed", "archived"}
 GATE_STATUSES = {"promote", "hold", "inconclusive"}
 ATTEMPT_STATUSES = {
     "queued", "running", "completed", "timed_out", "model_failed",
-    "agent_failed", "infra_failed", "trace_incomplete", "cancelled",
+    "agent_failed", "infra_failed", "trace_incomplete", "environment_mismatch", "cancelled",
 }
 
 
@@ -195,7 +195,7 @@ def validate_attempt(payload: dict[str, Any]) -> EvolutionValidation:
     _enum(payload, "status", ATTEMPT_STATUSES, errors)
     _timestamp(payload, "started_at", errors)
     _timestamp(payload, "ended_at", errors, optional=True)
-    if payload.get("status") in {"completed", "timed_out", "model_failed", "agent_failed", "infra_failed", "trace_incomplete", "cancelled"} and payload.get("ended_at") is None:
+    if payload.get("status") in {"completed", "timed_out", "model_failed", "agent_failed", "infra_failed", "trace_incomplete", "environment_mismatch", "cancelled"} and payload.get("ended_at") is None:
         errors.append("ended_at is required for a terminal attempt")
     _required_string(payload, "artifact_dir", errors)
     trace_id = payload.get("trace_id")

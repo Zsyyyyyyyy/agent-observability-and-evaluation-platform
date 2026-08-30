@@ -70,7 +70,7 @@ def _validate_arm_metrics(label: str, metrics: dict[str, Any]) -> None:
 
     rate_fields = (
         "completion_rate", "evaluation_pass_rate", "test_pass_rate",
-        "model_failed_rate", "trace_incomplete_rate", "infra_failed_rate",
+        "model_failed_rate", "trace_incomplete_rate", "environment_mismatch_rate", "infra_failed_rate",
         "path_policy_violation_rate", "diff_policy_violation_rate",
     )
     non_negative_fields = (
@@ -266,6 +266,10 @@ def _quality_rules(
             "max_candidate_trace_incomplete_rate", "trace incomplete rate",
         ),
         (
+            "environment_mismatch_rate", "candidate_environment_mismatch_rate_limit",
+            "max_candidate_environment_mismatch_rate", "runtime environment mismatch rate",
+        ),
+        (
             "infra_failed_rate", "candidate_infra_failed_rate_limit",
             "max_candidate_infra_failed_rate", "infrastructure failed rate",
         ),
@@ -292,6 +296,10 @@ def _quality_rules(
             "max_trace_incomplete_rate_delta", "trace incomplete rate",
         ),
         (
+            "environment_mismatch_rate", "environment_mismatch_rate_non_regression",
+            "max_environment_mismatch_rate_delta", "runtime environment mismatch rate",
+        ),
+        (
             "infra_failed_rate", "infra_failed_rate_non_regression",
             "max_infra_failed_rate_delta", "infrastructure failed rate",
         ),
@@ -310,6 +318,8 @@ def _quality_rules(
             key=policy_key, default=1.0, label=label,
         ))
     for metric, name, policy_key, label in absolute_maximums:
+        if metric == "environment_mismatch_rate" and metric not in candidate:
+            continue
         rules.append(_absolute_upper_rule(
             name=name, value=candidate.get(metric), policy=policy,
             key=policy_key, default=0.0, label=label,
@@ -320,6 +330,8 @@ def _quality_rules(
             policy=policy, key=policy_key, default=0.0, label=label,
         ))
     for metric, name, policy_key, label in non_regression_maximums:
+        if metric == "environment_mismatch_rate" and (metric not in baseline or metric not in candidate):
+            continue
         rules.append(_relative_upper_rule(
             name=name, baseline=baseline.get(metric), candidate=candidate.get(metric),
             policy=policy, key=policy_key, default=0.0, label=label,
@@ -346,6 +358,37 @@ def _cost_rule(
         absolute_zero_baseline_policy_key=zero_baseline_key,
         policy=policy, label=label,
     )
+
+
+def _provenance_rules(experiment: dict[str, Any], policy: dict[str, Any]) -> list[GateRule]:
+    """检查 Gate 所依赖的证据是谁采集的，避免把 Agent 自报当作平台观测。"""
+
+    summaries = experiment.get("summaries")
+    if not isinstance(summaries, dict):
+        return []
+    jobs = [job for summary in summaries.values() if isinstance(summary, dict) for job in summary.get("jobs", []) if isinstance(job, dict)]
+    if not jobs or not any(isinstance(job.get("evidence_provenance"), dict) for job in jobs):
+        # 历史汇总没有来源字段；保留其原有 Gate 语义，不能在 report-only 时倒灌新要求。
+        return []
+    core_fields = ("process_lifecycle", "test_result", "git_evidence")
+    core_valid = all(
+        isinstance(job.get("evidence_provenance"), dict)
+        and all(job["evidence_provenance"].get(field) == "platform_observed" for field in core_fields)
+        for job in jobs
+    )
+    rules = [GateRule("core_evidence_provenance", 1.0 if core_valid else 0.0, "== 1.0", core_valid, "lifecycle, test, and Git evidence must be platform observed")]
+    accepted_cost_origins = policy.get("accepted_cost_evidence_origins", ["platform_observed", "framework_observed"])
+    if not isinstance(accepted_cost_origins, list) or not all(isinstance(item, str) for item in accepted_cost_origins):
+        raise ValueError("policy.accepted_cost_evidence_origins must be a string array")
+    observed_cost_jobs = [job for job in jobs if job.get("model_tokens") is not None or job.get("tool_calls") is not None]
+    if observed_cost_jobs:
+        trusted = all(
+            isinstance(job.get("evidence_provenance"), dict)
+            and job["evidence_provenance"].get("model_usage", job["evidence_provenance"].get("tool_trace")) in accepted_cost_origins
+            for job in observed_cost_jobs
+        )
+        rules.append(GateRule("cost_evidence_provenance", 1.0 if trusted else 0.0, "== 1.0", trusted, "observed cost evidence must use an accepted origin"))
+    return rules
 
 
 def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
@@ -381,6 +424,7 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
     rules.extend(_coverage_rules(experiment, policy))
 
     rules.extend(_quality_rules(baseline, candidate, policy))
+    rules.extend(_provenance_rules(experiment, policy))
     cost_rules = [_cost_rule(
         baseline, candidate, policy,
         metric="avg_tool_calls", name="average_tool_calls_limit",
@@ -429,10 +473,12 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
     correctness_reliability_rules = {
         "candidate_completion_rate_minimum", "candidate_evaluation_pass_rate_minimum",
         "candidate_model_failed_rate_limit", "candidate_trace_incomplete_rate_limit",
+        "candidate_environment_mismatch_rate_limit",
         "candidate_infra_failed_rate_limit", "candidate_path_policy_violation_rate_limit",
         "candidate_diff_policy_violation_rate_limit",
         "completion_rate_non_regression", "evaluation_pass_rate_non_regression",
         "model_failed_rate_non_regression", "trace_incomplete_rate_non_regression",
+        "environment_mismatch_rate_non_regression",
         "infra_failed_rate_non_regression", "path_policy_violation_rate_non_regression",
         "diff_policy_violation_rate_non_regression", "all_pass_at_3_non_regression",
         "flaky_case_rate_non_regression",
@@ -452,6 +498,7 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
     )
     evidence_inconclusive_rules = {
         "protocol_strict_comparability", "paired_case_coverage", "paired_trial_coverage",
+        "core_evidence_provenance", "cost_evidence_provenance",
     }
     unavailable = [rule.name for rule in rules if rule.actual is None]
     required_unavailable = [rule.name for rule in rules if rule.actual is None and rule.required]

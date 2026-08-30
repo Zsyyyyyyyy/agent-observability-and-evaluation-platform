@@ -138,6 +138,11 @@ class _LangGraphCallback(BaseCallbackHandler):
         usage = _usage(response)
         self._end(run_id, usage=usage) if usage else self._end(run_id)
 
+    def on_llm_new_token(self, token: str, *, run_id: object, **_: Any) -> None:
+        """流式回调只证明调用仍在进行；Token 文本不得进入 Trace。"""
+
+        return None
+
     def on_llm_error(self, error: BaseException, *, run_id: object, **_: Any) -> None:
         self._end(run_id, "error", error_type=type(error).__name__)
 

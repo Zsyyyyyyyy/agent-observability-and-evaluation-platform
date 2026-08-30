@@ -9,14 +9,30 @@ def _spans(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     spans: dict[str, dict[str, Any]] = {}
     for event in events:
         if event.get("kind") == "span_start" and isinstance(event.get("span_id"), str):
-            spans[event["span_id"]] = {"id": event["span_id"], "parent": event.get("parent_span_id"), "name": event.get("name"), "span_type": event.get("span_type"), "start": event.get("ts"), "end": None}
+            spans[event["span_id"]] = {"id": event["span_id"], "parent": event.get("parent_span_id"), "name": event.get("name"), "span_type": event.get("span_type"), "start": event.get("ts"), "end": None, "attributes": event.get("attributes") if isinstance(event.get("attributes"), dict) else {}, "end_attributes": {}}
         elif event.get("kind") == "span_end" and isinstance(event.get("span_id"), str) and event["span_id"] in spans:
             spans[event["span_id"]]["end"] = event.get("ts")
+            spans[event["span_id"]]["end_attributes"] = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
     return spans
 
 
 def _signature(span: dict[str, Any]) -> tuple[str, str]:
     return str(span.get("span_type") or "other"), str(span.get("name") or "unknown")
+
+
+def _view(span: dict[str, Any]) -> dict[str, Any]:
+    """只输出展示差异所需的聚合值，不暴露模型正文或工具参数。"""
+
+    start, end = span.get("start"), span.get("end")
+    usage = span.get("end_attributes", {}).get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    tokens = usage.get("total_tokens")
+    return {
+        "span_id": span["id"], "name": span["name"], "span_type": span["span_type"],
+        "duration_ms": round((float(end) - float(start)) * 1000, 3) if isinstance(start, (int, float)) and isinstance(end, (int, float)) else None,
+        "tokens": tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else None,
+        "tool_calls": 1 if span.get("name") == "tool.call" else 0,
+    }
 
 
 def _lcs(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> list[tuple[int, int]]:
@@ -71,15 +87,16 @@ def compare_traces(baseline_events: list[dict[str, Any]], candidate_events: list
         paired_left, paired_right = {i for i, _ in pairs}, {j for _, j in pairs}
         for index, span in enumerate(left):
             if index not in paired_left:
-                row = {"kind": "removed", "depth": depth, "baseline": {"span_id": span["id"], "name": span["name"], "span_type": span["span_type"]}, "candidate": None}
+                row = {"kind": "removed", "depth": depth, "baseline": _view(span), "candidate": None}
                 rows.append(row); first_divergence = first_divergence or row
         for index, span in enumerate(right):
             if index not in paired_right:
-                row = {"kind": "added", "depth": depth, "baseline": None, "candidate": {"span_id": span["id"], "name": span["name"], "span_type": span["span_type"]}}
+                row = {"kind": "added", "depth": depth, "baseline": None, "candidate": _view(span)}
                 rows.append(row); first_divergence = first_divergence or row
         for left_index, right_index in pairs:
             before, after = left[left_index], right[right_index]
-            rows.append({"kind": "matched", "depth": depth, "baseline": {"span_id": before["id"], "name": before["name"], "span_type": before["span_type"]}, "candidate": {"span_id": after["id"], "name": after["name"], "span_type": after["span_type"]}})
+            before_view, after_view = _view(before), _view(after)
+            rows.append({"kind": "matched", "depth": depth, "baseline": before_view, "candidate": after_view, "delta": {key: after_view[key] - before_view[key] if isinstance(before_view[key], (int, float)) and isinstance(after_view[key], (int, float)) else None for key in ("duration_ms", "tokens", "tool_calls")}})
             visit(before["id"], after["id"], depth + 1)
     visit(None, None, 0)
     return {"schema_version": 1, "alignment": "ordered_sibling_lcs", "rows": rows, "first_divergence": first_divergence, "matched_span_count": sum(row["kind"] == "matched" for row in rows), "critical_path": {"baseline": _critical_path(baseline), "candidate": _critical_path(candidate)}}

@@ -623,6 +623,8 @@ def _job_summary(job: dict[str, object], result: dict[str, object]) -> dict[str,
         "agent_source_hash": result.get("agent_source_hash"),
         "expected_agent_source_hash": result.get("expected_agent_source_hash"),
         "agent_source_hash_matches_protocol": result.get("agent_source_hash_matches_protocol"),
+        "runtime_environment_matches_protocol": result.get("runtime_environment_matches_protocol"),
+        "evidence_provenance": result.get("evidence_provenance"),
     }
 
 

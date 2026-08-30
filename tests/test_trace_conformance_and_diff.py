@@ -30,3 +30,11 @@ class TraceConformanceAndDiffTests(unittest.TestCase):
         self.assertEqual(diff["alignment"], "ordered_sibling_lcs")
         self.assertEqual(diff["first_divergence"]["kind"], "removed")
         self.assertEqual(diff["critical_path"]["baseline"]["precision"], "approximate")
+
+    def test_matched_rows_include_display_safe_metric_deltas(self):
+        baseline = trace("agent.run", "workflow.plan")
+        candidate = trace("agent.run", "workflow.plan")
+        candidate[-1]["ts"] = 9.0
+        matched = next(row for row in compare_traces(baseline, candidate)["rows"] if row["kind"] == "matched")
+        self.assertIn("duration_ms", matched["delta"])
+        self.assertEqual(matched["baseline"]["tool_calls"], 0)

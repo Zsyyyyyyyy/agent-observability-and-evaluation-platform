@@ -45,7 +45,7 @@ def _agent_id(version: str) -> str:
 def _attempt_status(status: Any) -> str:
     value = str(status or "infra_failed")
     return {"invalid": "trace_incomplete", "aborted": "cancelled", "running": "cancelled"}.get(value, value if value in {
-        "queued", "completed", "timed_out", "model_failed", "agent_failed", "infra_failed", "trace_incomplete", "cancelled"
+        "queued", "completed", "timed_out", "model_failed", "agent_failed", "infra_failed", "trace_incomplete", "environment_mismatch", "cancelled"
     } else "infra_failed")
 
 

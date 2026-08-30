@@ -2,6 +2,21 @@
 
 本项目仍处于本地 Agent 评测平台阶段。版本号描述当前工程成熟度，不代表多租户生产服务承诺。
 
+## 1.3.0 - 2026-08-30
+
+### Added
+
+- 运行环境身份指纹：解释器、平台与依赖集合以非敏感哈希冻结，并在 Trial 中复核。
+- Gate Evidence Policy：核心平台证据与模型/工具成本证据按 `evidence_provenance` 区分来源。
+- LangGraph Trace Conformance 自检，覆盖工作流层级、流式回调、并行节点与异常闭合。
+- 同步双列 Trace Diff，展示结构分叉、Span 时长/Token/工具调用差异、关键路径与失败 Span 对齐。
+- Studio 取消、原 Runtime 续跑，以及重启 Studio 后发现并恢复已取消实验。
+
+### Changed
+
+- Runtime mismatch 现在以 `environment_mismatch` 记录，不再误标为 `trace_incomplete`。
+- Gate 对历史无 provenance 的 Artifact 保持兼容；新 Trial 则以来源可信度参与结论。
+
 ## 0.2.0 - 2026-08-24
 
 ### Added

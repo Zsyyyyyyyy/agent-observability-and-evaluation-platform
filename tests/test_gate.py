@@ -196,3 +196,13 @@ class GateTests(unittest.TestCase):
         report = evaluate_gate(incomplete_trial, {})
         self.assertEqual(report["decision"]["status"], "inconclusive")
         self.assertIn("paired_trial_coverage", report["decision"]["hard_blocking_failures"])
+
+    def test_gate_requires_platform_origin_for_core_trial_evidence(self):
+        document = experiment(METRICS, METRICS)
+        document["summaries"] = {
+            "baseline": {"jobs": [{"evidence_provenance": {"process_lifecycle": "platform_observed", "test_result": "platform_observed", "git_evidence": "platform_observed"}}]},
+            "candidate": {"jobs": [{"evidence_provenance": {"process_lifecycle": "sdk_self_reported", "test_result": "platform_observed", "git_evidence": "platform_observed"}}]},
+        }
+        report = evaluate_gate(document, {})
+        self.assertEqual(report["decision"]["status"], "inconclusive")
+        self.assertIn("core_evidence_provenance", report["decision"]["hard_blocking_failures"])
