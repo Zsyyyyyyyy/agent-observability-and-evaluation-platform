@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from scripts.serve_studio import REGRESSION, STUDIO_HOST, _prepared_request, _prepared_request_with_snapshots, command_for, main, preflight
+from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _prepared_request, _prepared_request_with_snapshots, command_for, handler_for, main, preflight
 
 
 class RunStudioTests(unittest.TestCase):
@@ -95,6 +95,8 @@ class RunStudioTests(unittest.TestCase):
             try:
                 self.assertTrue(preflight_result["valid"])
                 self.assertTrue(preflight_result["configuration"]["git_sources"]["candidate_dirty"])
+                self.assertEqual(len(preflight_result["configuration"]["git_sources"]["baseline_revision"]), 40)
+                self.assertEqual(len(preflight_result["configuration"]["git_sources"]["candidate_revision"]), 40)
                 self.assertIn("{agent_source}/agent.py", Path(prepared["baseline"]).read_text(encoding="utf-8"))
                 self.assertIsNotNone(snapshots)
                 self.assertEqual((snapshots.baseline_root / "agent.py").read_text(encoding="utf-8"), "VERSION = 'baseline'\n")
@@ -162,6 +164,32 @@ class RunStudioTests(unittest.TestCase):
 
         self.assertTrue(result["valid"])
         self.assertTrue(any("Callback" in warning for warning in result["warnings"]))
+
+    def test_snapshot_is_cleaned_when_a_run_starts_during_snapshot_creation(self):
+        with TemporaryDirectory() as directory:
+            process = mock.Mock()
+            process.poll.side_effect = [1, None]
+            run = StudioRun(process=process)
+            snapshots = mock.Mock()
+            handler = object.__new__(handler_for(Path(directory), run))
+            handler.path = "/api/run"
+            handler._request_body = mock.Mock(return_value={})
+            handler._json = mock.Mock()
+            with mock.patch("scripts.serve_studio.preflight", return_value={"valid": True}), \
+                mock.patch("scripts.serve_studio._prepared_request_with_snapshots", return_value=({"baseline": "unused", "candidate": "unused"}, snapshots)):
+                handler.do_POST()
+
+            self.assertEqual(handler._json.call_args.args[0], {"error": "已有 Experiment 正在运行"})
+            snapshots.cleanup.assert_called_once()
+
+    def test_run_status_polling_does_not_write_access_logs(self):
+        handler_class = handler_for(Path("."), StudioRun())
+        handler = object.__new__(handler_class)
+        handler.command, handler.path = "GET", "/api/run"
+        with mock.patch("http.server.SimpleHTTPRequestHandler.log_message") as parent:
+            handler.log_message('"GET /api/run HTTP/1.1" 200 -')
+
+        parent.assert_not_called()
 
     def test_preflight_rejects_unknown_benchmark_and_out_of_range_trials(self):
         result = preflight({"benchmarks": ["outside.yaml"], "trials": 99})

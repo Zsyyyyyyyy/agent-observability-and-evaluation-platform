@@ -272,7 +272,7 @@ def preflight(request: object) -> dict[str, object]:
                 "untracked_changes": source_plan.untracked_change_count,
             },
         }
-        return {"valid": True, "errors": [], "warnings": [*warnings, "Git snapshots are created only after you start the Experiment; ignored files and local secrets are excluded."], "configuration": configuration}
+        return {"valid": True, "errors": [], "warnings": [*warnings, "Git snapshots are created only after you start the Experiment; ignored files and common untracked local secret files are excluded."], "configuration": configuration}
     assert baseline is not None and candidate is not None
     return {
         "valid": True, "errors": [], "warnings": warnings,
@@ -383,12 +383,17 @@ def handler_for(static_root: Path, run: StudioRun):
             if not checked["valid"]:
                 return self._json(checked, HTTPStatus.UNPROCESSABLE_ENTITY)
             assert isinstance(request, dict)
+            with run.lock:
+                if run.process is not None and run.process.poll() is None:
+                    return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
             try:
                 prepared, snapshots = _prepared_request_with_snapshots(request)
             except (ValueError, AgentSpecError, GitSourceError) as exc:
                 return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
             with run.lock:
                 if run.process is not None and run.process.poll() is None:
+                    if snapshots:
+                        snapshots.cleanup()
                     return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
                 try:
                     run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -401,8 +406,6 @@ def handler_for(static_root: Path, run: StudioRun):
                 threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
             return self._json(run_status(run), HTTPStatus.ACCEPTED)
 
-        def log_message(self, format: str, *args: object) -> None:
-            print("[studio] " + format % args)
     return StudioHandler
 
 

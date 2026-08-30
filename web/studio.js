@@ -66,8 +66,12 @@ function renderPreflight(result) {
   const errors = (result.errors || []).map(item => `<li>${escapeHtml(item)}</li>`).join("");
   const warnings = (result.warnings || []).map(item => `<li>${escapeHtml(item)}</li>`).join("");
   const configuration = result.configuration;
+  const gitSources = configuration?.git_sources;
+  const gitIdentity = gitSources
+    ? `<p>Git evidence · Baseline <code>${escapeHtml(gitSources.baseline_revision)}</code> · Candidate <code>${escapeHtml(gitSources.candidate_revision)}</code>${gitSources.candidate_dirty ? ` · working tree changed (${gitSources.tracked_changes} tracked, ${gitSources.untracked_changes} untracked)` : " · clean commit/tag"}</p>`
+    : "";
   preflightResult.className = `preflight-result ${preflightValid ? "valid" : "invalid"}`;
-  preflightResult.innerHTML = configuration ? `<strong>Ready · ${escapeHtml(configuration.agent_id)} ${escapeHtml(configuration.baseline_version)} → ${escapeHtml(configuration.candidate_version)}</strong><p>${configuration.benchmark_count} Cases × ${configuration.trial_count / configuration.benchmark_count / 2} repeats × 2 versions = ${configuration.trial_count} Trials</p>${warnings ? `<ul>${warnings}</ul>` : ""}` : `<strong>Not ready</strong>${errors ? `<ul>${errors}</ul>` : ""}${warnings ? `<ul>${warnings}</ul>` : ""}`;
+  preflightResult.innerHTML = configuration ? `<strong>Ready · ${escapeHtml(configuration.agent_id)} ${escapeHtml(configuration.baseline_version)} → ${escapeHtml(configuration.candidate_version)}</strong><p>${configuration.benchmark_count} Cases × ${configuration.trial_count / configuration.benchmark_count / 2} repeats × 2 versions = ${configuration.trial_count} Trials</p>${gitIdentity}${warnings ? `<ul>${warnings}</ul>` : ""}` : `<strong>Not ready</strong>${errors ? `<ul>${errors}</ul>` : ""}${warnings ? `<ul>${warnings}</ul>` : ""}`;
 }
 async function request(url, options) { const response = await fetch(url, options); const data = await response.json(); if (!response.ok && !data.errors) data.errors = [data.error || "请求失败"]; return data; }
 async function validate() { const result = await request("/api/preflight", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(values())}); renderPreflight(result); return result; }

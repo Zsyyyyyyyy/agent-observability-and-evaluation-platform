@@ -90,6 +90,8 @@ class AgentSpec:
             "observation_mode": self.observation_mode,
             "capabilities": self.capabilities.as_dict(),
             "source_root": "{agent_source}" if self.source_root is not None else None,
+            # 同一命令指向不同源码版本时，AgentSpec 身份必须不同。
+            "source_identity": source,
         }
         canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return {

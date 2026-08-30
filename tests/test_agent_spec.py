@@ -139,6 +139,7 @@ class AgentSpecTests(unittest.TestCase):
         self.assertEqual(before["source_scope"], "git_worktree")
         self.assertEqual(before["entrypoint_hash"], after["entrypoint_hash"])
         self.assertNotEqual(before["agent_source_hash"], after["agent_source_hash"])
+        self.assertNotEqual(before["agent_spec_hash"], after["agent_spec_hash"])
 
     def test_source_root_resolves_agent_source_template_without_hashing_temp_path(self):
         with TemporaryDirectory() as directory, TemporaryDirectory() as spec_directory:

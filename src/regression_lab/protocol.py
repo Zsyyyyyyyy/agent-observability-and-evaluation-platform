@@ -110,6 +110,8 @@ def agent_source_snapshot(command: Iterable[str], source_root: str | Path | None
                 continue
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
+            digest.update(str(source.stat().st_mode & 0o777).encode("ascii"))
+            digest.update(b"\0")
             digest.update(source.read_bytes())
             digest.update(b"\0")
         revision = subprocess.run(

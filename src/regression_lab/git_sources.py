@@ -9,6 +9,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
+_SENSITIVE_UNTRACKED_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
+_SENSITIVE_UNTRACKED_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+
+
 class GitSourceError(ValueError):
     """Git 来源无法安全冻结时抛出。"""
 
@@ -133,7 +137,7 @@ def module_exists(plan: GitSourcePlan, module_name: str, *, candidate: bool) -> 
         return False
     relative_module = "/".join(parts)
     return entry_exists(plan, f"{relative_module}.py", candidate=candidate) or entry_exists(
-        plan, f"{relative_module}/__init__.py", candidate=candidate,
+        plan, f"{relative_module}/__main__.py", candidate=candidate,
     )
 
 
@@ -147,12 +151,29 @@ def _clone_revision(repository: Path, revision: str, destination: Path) -> None:
     _git(destination, "checkout", "--detach", revision)
 
 
+def _is_sensitive_untracked_path(relative_path: Path) -> bool:
+    """未跟踪文件没有经过 Git 审核，常见密钥不能随源码快照传播。"""
+
+    name = relative_path.name.lower()
+    return (
+        any(part == ".venv" for part in relative_path.parts)
+        or name == ".env"
+        or name.startswith(".env.")
+        or name in _SENSITIVE_UNTRACKED_NAMES
+        or relative_path.suffix.lower() in _SENSITIVE_UNTRACKED_SUFFIXES
+    )
+
+
 def _copy_untracked(repository: Path, destination: Path) -> None:
     names = _git(repository, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
     for relative_name in filter(None, names):
-        source = repository / relative_name
+        relative_path = Path(relative_name)
+        if _is_sensitive_untracked_path(relative_path):
+            continue
+        source = repository / relative_path
         target = destination / relative_name
-        if not source.is_file() and not source.is_symlink():
+        # 未跟踪软链接可能把快照带到仓库外；源码入口应显式提交后再使用。
+        if not source.is_file() or source.is_symlink():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target, follow_symlinks=False)
