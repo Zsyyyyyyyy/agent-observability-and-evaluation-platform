@@ -72,6 +72,33 @@ button:active { transform: translateY(1px); }
 .evidence-content { padding: 16px 22px 18px; }
 .evidence-row, .case-signal-list, .case-signal, .stat-verdict, .stat-grid, .behavior-row, .behavior-summary-list { border-color: #e4e9f3; }
 .case-signal:hover, .case-signal:focus { background: #f4f7ff; }
+
+/* 统计结论不是第四个并列读数：横向排列能让结论、置信区间与适用范围在一次扫读中成立。 */
+.statistics-panel { grid-column: 1 / -1; }
+.statistics-panel .evidence-content {
+  display: grid;
+  grid-template-columns: minmax(220px, .75fr) minmax(310px, 1.15fr) minmax(240px, .9fr);
+  align-items: center;
+  min-height: 150px;
+  padding: 0 22px;
+}
+.statistics-panel .stat-verdict {
+  min-height: 0;
+  padding: 18px 22px 18px 0;
+  border-bottom: 0;
+}
+.statistics-panel .stat-grid {
+  margin: 0;
+  padding: 0 22px;
+  border-top: 0;
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+.statistics-panel .evidence-note { margin: 0; padding-left: 22px; }
+@media (max-width: 920px) {
+  .statistics-panel .evidence-content { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
+  .statistics-panel .evidence-note { grid-column: 1 / -1; padding: 0 0 16px; }
+}
 .console-context, .case-controls, .case-behavior-head { border-color: var(--line); background: #f6f8ff; }
 .console-context { border-radius: 12px; }
 .runtime-context-error { border-color: #f0b7bb; border-radius: 12px; background: #fff7f7; }
@@ -126,4 +153,8 @@ footer { background: #182238; color: #aebbd4; }
   .masthead { height: 58px; padding: 0 18px; } main { padding: 28px 18px 56px; }.hero { padding-top: 8px; }
   .metrics { border-radius: 12px; }.metrics article:nth-child(2) { border-right: 0; }.metrics article:nth-child(3) { border-right: 1px solid var(--line); }
   .panel, .decision-spine, .gate-card { border-radius: 12px; }
+  .statistics-panel .evidence-content { grid-template-columns: 1fr; align-items: start; padding: 0 18px; }
+  .statistics-panel .stat-verdict { padding: 16px 0 14px; }
+  .statistics-panel .stat-grid { padding: 0; border-right: 0; border-left: 0; border-top: 1px solid var(--line); }
+  .statistics-panel .evidence-note { padding: 14px 0 16px; }
 }
