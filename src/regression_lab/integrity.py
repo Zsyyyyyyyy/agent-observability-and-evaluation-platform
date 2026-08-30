@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from regression_lab.manifest import ManifestError, safe_child_path
+from regression_lab.gate import evaluate_gate
 from regression_lab.protocol import protocol_fingerprint
 from regression_lab.schema import validate_trace
 
@@ -70,6 +71,7 @@ def _verify_trial(
     job: dict[str, Any],
     protocol_fingerprint: str | None,
     expected_source: Any,
+    expected_environment: Any,
     issues: list[dict[str, str]],
 ) -> tuple[tuple[str, str, int] | None, int]:
     """校验一个 Trial 的汇总投影、选定 Attempt、源码身份和 Trace。"""
@@ -98,6 +100,7 @@ def _verify_trial(
     result = _read_object(result_path, issues, root)
     if result is None:
         return identity, checks
+    # summary 只是展示投影；一旦与选定 Attempt 不一致，不能继续把它当作历史事实。
     for field in _SUMMARY_PROJECTION_FIELDS:
         if job.get(field) != result.get(field):
             _issue(
@@ -160,6 +163,24 @@ def _verify_trial(
             issues, "trial_agent_source_mismatch", result_path, root,
             "selected Result Agent source does not match the frozen version",
         )
+    if isinstance(expected_environment, str):
+        runtime_environment = result.get("runtime_environment")
+        actual_environment = (
+            runtime_environment.get("identity_hash")
+            if isinstance(runtime_environment, dict)
+            else None
+        )
+        # 环境身份与源码身份同属冻结协议；不能仅相信 Worker 当时写下的匹配布尔值。
+        if actual_environment != expected_environment:
+            _issue(
+                issues, "trial_runtime_environment_mismatch", result_path, root,
+                "selected Result runtime environment does not match the frozen version",
+            )
+        if result.get("runtime_environment_matches_protocol") is not True:
+            _issue(
+                issues, "trial_runtime_environment_match_missing", result_path, root,
+                "selected Result does not confirm its runtime environment matched the Protocol",
+            )
 
     checks += 1
     trace_path = _artifact_path(result.get("trace_path"), result_dir=job_dir, runtime=root)
@@ -227,6 +248,11 @@ def verify_experiment_runtime(runtime: str | Path) -> dict[str, Any]:
         for item in protocol.get("agents", [])
         if isinstance(item, dict) and isinstance(item.get("label"), str)
     }
+    expected_environments = {
+        item.get("label"): (item.get("runtime_environment") or {}).get("identity_hash")
+        for item in protocol.get("agents", [])
+        if isinstance(item, dict) and isinstance(item.get("runtime_environment"), dict)
+    }
     summaries = experiment.get("summaries")
     if not isinstance(summaries, dict):
         _issue(issues, "summaries_missing", root / "experiment.json", root,
@@ -255,6 +281,7 @@ def verify_experiment_runtime(runtime: str | Path) -> dict[str, Any]:
                 job=job,
                 protocol_fingerprint=stored_fingerprint if isinstance(stored_fingerprint, str) else None,
                 expected_source=expected_sources.get(label),
+                expected_environment=expected_environments.get(label),
                 issues=issues,
             )
             checks += trial_checks
@@ -283,6 +310,27 @@ def verify_experiment_runtime(runtime: str | Path) -> dict[str, Any]:
         if gate is not None and evidence.get("comparison") != experiment.get("comparison"):
             _issue(issues, "gate_evidence_mismatch", gate_path, root,
                    "Gate evidence is stale or belongs to another Experiment report")
+        policy = gate.get("evidence_policy") if isinstance(gate, dict) and isinstance(gate.get("evidence_policy"), dict) else {}
+        policy_snapshot = policy.get("snapshot") if isinstance(policy, dict) else None
+        if isinstance(policy_snapshot, dict):
+            expected_fingerprint = "sha256:" + hashlib.sha256(
+                json.dumps(policy_snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()
+            if policy.get("fingerprint") != expected_fingerprint:
+                _issue(issues, "gate_policy_fingerprint_mismatch", gate_path, root,
+                       "Gate policy snapshot does not match its recorded fingerprint")
+            try:
+                recomputed_gate = evaluate_gate(experiment, policy_snapshot)
+            except ValueError as exc:
+                _issue(issues, "gate_policy_invalid", gate_path, root,
+                       f"Gate policy snapshot cannot be evaluated: {exc}")
+            else:
+                # 结论、阻断规则和规则明细都由冻结报告重算，避免只校验输入却漏掉 PROMOTE 篡改。
+                for field in ("passed", "rules", "decision"):
+                    if gate.get(field) != recomputed_gate.get(field):
+                        _issue(issues, "gate_decision_mismatch", gate_path, root,
+                               "Gate decision does not match the frozen Experiment evidence and policy")
+                        break
 
     return {
         "schema_version": 1,

@@ -542,6 +542,8 @@ def evaluate_gate(experiment: dict[str, Any], policy: dict[str, Any]) -> dict[st
         "evidence_policy": {
             "require_cost_evidence": require_cost_evidence,
             "fingerprint": "sha256:" + hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest(),
+            # Gate 结论必须能在离线 Artifact Verify 中重算；仅存指纹无法还原阈值。
+            "snapshot": policy,
         },
         "evidence": {"comparison": comparison},
     }

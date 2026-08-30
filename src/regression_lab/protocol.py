@@ -335,6 +335,7 @@ def build_execution_plan(jobs: Iterable[dict[str, Any]], agents: list[dict[str, 
         raise ValueError("execution plan requires at least two agents")
     pairs = sorted((str(job["case_id"]), int(job["trial_index"]), str(job["job_id"])) for job in jobs)
     generator = random.Random(seed)
+    # 先冻结 Case/Trial 顺序，再为每一对版本随机先后，避免运行先后成为性能差异的隐含变量。
     generator.shuffle(pairs)
     entries: list[dict[str, Any]] = []
     for case_id, trial_index, job_id in pairs:

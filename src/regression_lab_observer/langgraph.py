@@ -158,9 +158,13 @@ class _LangGraphCallback(BaseCallbackHandler):
         self._end(run_id, "error", error_type=type(error).__name__)
 
     def close_open_spans(self) -> None:
+        had_open_spans = bool(self._span_by_run)
         for run_id, span_id in reversed(list(self._span_by_run.items())):
             self.observer.writer.end_span(span_id, status="error", duration_ms=self.observer.elapsed(run_id), error_type="callback_unclosed")
         self._span_by_run.clear()
+        if had_open_spans:
+            # 为保持 JSONL 结构可读会补齐结束事件，但补齐不等于 Callback 已完整观测。
+            self.observer.record_callback_error("callback_unclosed")
 
 
 class LangGraphObserver:
@@ -197,8 +201,8 @@ class LangGraphObserver:
         started = self._started.pop(run_id, None)
         return round((time.monotonic() - started) * 1000, 3) if started is not None else 0.0
 
-    def record_callback_error(self, error: BaseException) -> None:
-        self._errors.append(type(error).__name__)
+    def record_callback_error(self, error: BaseException | str) -> None:
+        self._errors.append(error if isinstance(error, str) else type(error).__name__)
 
     def __enter__(self) -> "LangGraphObserver":
         self.started("root")

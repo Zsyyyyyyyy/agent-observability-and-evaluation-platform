@@ -344,6 +344,7 @@ def _run_execution_plan(
         if isinstance(item, dict) and isinstance(item.get("runtime_environment"), dict)
     }
     uses_external_command = external_command is not None or external_arm_configs is not None
+    # 只能消费已落盘的计划条目；Resume 不能依据当前输入重新推导或调整 Trial 顺序。
     for entry in execution_plan["entries"]:
         agent_label = entry["agent_label"]
         agent = agents_by_label[agent_label]

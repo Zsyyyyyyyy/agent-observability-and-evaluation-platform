@@ -24,7 +24,7 @@ class GitSourceTests(unittest.TestCase):
 
     def test_working_tree_snapshot_preserves_original_and_excludes_local_secrets(self):
         directory, repository = self._repository()
-        with directory:
+        with directory, TemporaryDirectory() as outside_directory:
             before_head = self._git(repository, "rev-parse", "HEAD").strip()
             (repository / "agent.py").write_text("VERSION = 'candidate'\n", encoding="utf-8")
             (repository / "extra.py").write_text("EXTRA = True\n", encoding="utf-8")
@@ -32,6 +32,12 @@ class GitSourceTests(unittest.TestCase):
             (repository / ".venv").mkdir()
             (repository / ".venv" / "token").write_text("SECRET=value\n", encoding="utf-8")
             (repository / "local.pem").write_text("private-key\n", encoding="utf-8")
+            (repository / "secrets.json").write_text('{"token":"value"}\n', encoding="utf-8")
+            (repository / ".aws").mkdir()
+            (repository / ".aws" / "credentials").write_text("[default]\n", encoding="utf-8")
+            outside_secret = Path(outside_directory) / "outside-secret.txt"
+            outside_secret.write_text("SECRET=value\n", encoding="utf-8")
+            (repository / "outside-secret-link").symlink_to(outside_secret)
             before_status = self._git(repository, "status", "--porcelain")
 
             plan = inspect_git_sources(repository, "HEAD", "working_tree")
@@ -46,6 +52,9 @@ class GitSourceTests(unittest.TestCase):
                 self.assertFalse((snapshots.candidate_root / ".env").exists())
                 self.assertFalse((snapshots.candidate_root / ".venv").exists())
                 self.assertFalse((snapshots.candidate_root / "local.pem").exists())
+                self.assertFalse((snapshots.candidate_root / "secrets.json").exists())
+                self.assertFalse((snapshots.candidate_root / ".aws").exists())
+                self.assertFalse((snapshots.candidate_root / "outside-secret-link").exists())
                 self.assertEqual(self._git(repository, "rev-parse", "HEAD").strip(), before_head)
                 self.assertEqual(self._git(repository, "status", "--porcelain"), before_status)
             finally:

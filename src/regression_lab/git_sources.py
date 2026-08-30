@@ -11,6 +11,21 @@ from tempfile import TemporaryDirectory
 
 _SENSITIVE_UNTRACKED_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
 _SENSITIVE_UNTRACKED_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+_SENSITIVE_UNTRACKED_DIRECTORIES = {".aws", ".ssh", ".venv"}
+_SENSITIVE_UNTRACKED_FILE_NAMES = {
+    ".netrc",
+    "auth.json",
+    "credentials",
+    "credentials.json",
+    "secret",
+    "secret.json",
+    "secrets",
+    "secrets.json",
+    "service-account.json",
+    "service_account.json",
+    "token.json",
+    "tokens.json",
+}
 
 
 class GitSourceError(ValueError):
@@ -156,10 +171,11 @@ def _is_sensitive_untracked_path(relative_path: Path) -> bool:
 
     name = relative_path.name.lower()
     return (
-        any(part == ".venv" for part in relative_path.parts)
+        any(part.lower() in _SENSITIVE_UNTRACKED_DIRECTORIES for part in relative_path.parts)
         or name == ".env"
         or name.startswith(".env.")
         or name in _SENSITIVE_UNTRACKED_NAMES
+        or name in _SENSITIVE_UNTRACKED_FILE_NAMES
         or relative_path.suffix.lower() in _SENSITIVE_UNTRACKED_SUFFIXES
     )
 

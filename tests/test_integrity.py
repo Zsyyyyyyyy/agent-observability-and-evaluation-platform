@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from regression_lab.integrity import verify_experiment_runtime
+from regression_lab.gate import evaluate_gate
 from regression_lab.protocol import protocol_fingerprint
 
 
@@ -24,7 +25,11 @@ class ExperimentIntegrityTests(unittest.TestCase):
 
         protocol = {
             "schema_version": 2,
-            "agents": [{"label": "baseline", "agent_source_hash": "sha256:source"}],
+            "agents": [{
+                "label": "baseline",
+                "agent_source_hash": "sha256:source",
+                "runtime_environment": {"identity_hash": "sha256:environment"},
+            }],
         }
         protocol["protocol_fingerprint"] = protocol_fingerprint(protocol)
         (runtime / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
@@ -39,6 +44,8 @@ class ExperimentIntegrityTests(unittest.TestCase):
             "agent_source_hash": "sha256:source",
             "expected_agent_source_hash": "sha256:source",
             "agent_source_hash_matches_protocol": True,
+            "runtime_environment": {"identity_hash": "sha256:environment"},
+            "runtime_environment_matches_protocol": True,
         }
         attempt_result = attempt_dir / "result.json"
         attempt_result.write_text(json.dumps(result), encoding="utf-8")
@@ -107,6 +114,56 @@ class ExperimentIntegrityTests(unittest.TestCase):
 
         self.assertFalse(report["valid"])
         self.assertIn("job_path_invalid", {issue["code"] for issue in report["issues"]})
+
+    def test_detects_tampered_runtime_environment_identity(self):
+        with TemporaryDirectory() as directory:
+            runtime, attempt_result = self._runtime(Path(directory))
+            value = json.loads(attempt_result.read_text(encoding="utf-8"))
+            value["runtime_environment"] = {"identity_hash": "sha256:other"}
+            attempt_result.write_text(json.dumps(value), encoding="utf-8")
+            attempt_dir = attempt_result.parent
+            manifest_path = attempt_dir / "attempt-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["result_sha256"] = "sha256:" + hashlib.sha256(attempt_result.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            published_path = attempt_dir.parent.parent / "result.json"
+            published_path.write_text(json.dumps({**value, "attempt_path": str(attempt_dir)}), encoding="utf-8")
+
+            report = verify_experiment_runtime(runtime)
+
+        self.assertFalse(report["valid"])
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("trial_runtime_environment_mismatch", codes)
+
+    def test_detects_tampered_gate_decision_when_policy_snapshot_is_available(self):
+        with TemporaryDirectory() as directory:
+            runtime, _ = self._runtime(Path(directory))
+            experiment_path = runtime / "experiment.json"
+            experiment = json.loads(experiment_path.read_text(encoding="utf-8"))
+            metrics = {
+                "completion_rate": 1.0,
+                "evaluation_pass_rate": 1.0,
+                "model_failed_rate": 0.0,
+                "trace_incomplete_rate": 0.0,
+                "environment_mismatch_rate": 0.0,
+                "infra_failed_rate": 0.0,
+                "path_policy_violation_rate": 0.0,
+                "diff_policy_violation_rate": 0.0,
+                "avg_duration_ms": 1.0,
+                "avg_tool_calls": 1.0,
+                "avg_model_tokens": 1.0,
+            }
+            experiment["comparison"] = {"baseline": metrics, "candidate": metrics, "case_comparisons": []}
+            experiment_path.write_text(json.dumps(experiment), encoding="utf-8")
+            gate = evaluate_gate(experiment, {})
+            gate["decision"]["status"] = "promote"
+            gate["passed"] = True
+            (runtime / "gate-report.json").write_text(json.dumps(gate), encoding="utf-8")
+
+            report = verify_experiment_runtime(runtime)
+
+        self.assertFalse(report["valid"])
+        self.assertIn("gate_decision_mismatch", {issue["code"] for issue in report["issues"]})
 
 
 if __name__ == "__main__":

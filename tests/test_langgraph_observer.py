@@ -63,6 +63,26 @@ class LangGraphObserverTests(unittest.TestCase):
             self.assertTrue(validation.valid, validation.errors)
             self.assertFalse(status["complete"])
 
+    def test_unclosed_callback_span_marks_observation_incomplete(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.dict(os.environ, self._environment(root), clear=False):
+                with LangGraphObserver.from_environment() as observation:
+                    observation.callback.on_chain_start(
+                        {}, {}, run_id="node", metadata={"langgraph_node": "Planner"}
+                    )
+
+            status = json.loads((root / "observation-status.json").read_text(encoding="utf-8"))
+            validation = validate_trace(
+                root / "trace.jsonl",
+                expected_trace_id="trace_langgraph",
+                expected_trial_id="trial_langgraph",
+            )
+
+        self.assertTrue(validation.valid, validation.errors)
+        self.assertFalse(status["complete"])
+        self.assertIn("callback_unclosed", status["errors"])
+
     def test_parallel_streaming_and_async_callback_shapes_preserve_parentage(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
