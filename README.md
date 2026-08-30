@@ -73,20 +73,20 @@ Regression Lab 不负责规划、记忆、工具编排或替代 Agent Runtime。
 普通使用者不需要克隆仓库、创建虚拟环境或编写 YAML。macOS/Linux 上安装 [uv](https://docs.astral.sh/uv/) 后直接运行：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2" regression-lab start
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3" regression-lab start
 ```
 
 命令会启动并打开本机 Studio。它只监听 `127.0.0.1`；运行记录和 Studio 自动生成的 AgentSpec 默认保存到 `~/.regression-lab/`，不会写入安装目录。第一次只想确认环境可运行时：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2" regression-lab doctor
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2" regression-lab demo
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3" regression-lab doctor
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3" regression-lab demo
 ```
 
 `demo` 是完全离线、只读的公开演示，不调用模型、不执行外部 Agent。需要长期安装则使用：
 
 ```bash
-uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.2"
+uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3"
 regression-lab start
 ```
 

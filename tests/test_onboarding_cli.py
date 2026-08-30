@@ -15,6 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class OnboardingCliTests(unittest.TestCase):
+    def test_source_cli_reads_the_frozen_release_version(self):
+        completed = subprocess.run(
+            [sys.executable, "scripts/regression_lab.py", "--version"],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), f"regression-lab {(ROOT / 'VERSION').read_text(encoding='utf-8').strip()}")
+
     def test_validate_prints_user_facing_static_result(self):
         with TemporaryDirectory() as directory:
             spec = Path(directory) / "agent.yaml"

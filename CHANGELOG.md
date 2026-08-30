@@ -2,6 +2,15 @@
 
 本项目仍处于本地 Agent 评测平台阶段。版本号描述当前工程成熟度，不代表多租户生产服务承诺。
 
+## 1.3.3 - 2026-08-31
+
+### Fixed
+
+- Experiment Artifact Verify 重新校验每个 Trial 的 Runtime Environment Identity，不能再只信任历史结果中的匹配标记。
+- 新 Gate Artifact 会保存 Gate Policy Snapshot；Verify 会基于冻结的 Experiment 与 Policy 重算规则和结论，检测被篡改的 `PROMOTE` / `HOLD`。
+- LangGraph Callback 若存在未闭合 Span，会保留 JSONL 结构以便诊断，同时标记观测不完整，Trial 不能作为完整 Trace 证据晋级。
+- Git working-tree Snapshot 额外排除常见未跟踪的凭证文件、凭证目录和符号链接；超时清理会继续终止父进程已退出时遗留的子进程组。
+
 ## 1.3.2 - 2026-08-30
 
 ### Fixed
@@ -55,4 +64,4 @@
 - 公开导出会脱敏报告 JSON 与 Trace JSONL 中的本机路径和常见密钥形式。
 - Artifact 与 Demo 校验检测相对于冻结摘要的内容变化；它们不等价于数字签名或来源认证。
 
-> 仓库历史曾使用过过早的 `v1.0.0` 标签。当前重新以 `v0.2.0` 表达实际成熟度；稳定远程服务、签名 Artifact 和多租户隔离不在本版本承诺内。
+> 仓库历史曾使用过过早的 `v1.0.0` 标签；`v0.2.0` 是当时对本地平台成熟度的重新标定。当前 v1.3 仍不承诺稳定远程服务、签名 Artifact 或多租户隔离。

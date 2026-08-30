@@ -394,7 +394,11 @@ def _installed_version() -> str:
     try:
         return version("regression-lab")
     except PackageNotFoundError:
-        return "development"
+        # 源码方式运行尚未安装分发元数据，仍应显示仓库冻结的发布版本。
+        try:
+            return (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+        except OSError:
+            return "development"
 
 
 def main() -> int:

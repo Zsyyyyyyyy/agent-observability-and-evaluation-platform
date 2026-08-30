@@ -62,7 +62,17 @@ PYTHONPATH=src:. python3.11 scripts/run_benchmark.py \
   --manifest benchmarks/my-case.yaml --dry-run
 ```
 
-## 3. 让 Agent 接入 Observer SDK
+## 3. 选择观测方式
+
+| 模式 | Agent 改动 | 可用证据 | 来源标记 |
+|---|---|---|---|
+| `blackbox` | 无 | 进程、测试、Git Diff | `platform_observed` |
+| `langgraph` | `invoke/stream` 入口一处 Callback | Workflow、框架原生模型/工具事件 | `framework_observed` |
+| `sdk` | 手工包裹调用 | 自定义模型、工具和业务 Span | `sdk_self_reported` |
+
+Blackbox 的模型与工具指标是 `N/A`，不是零。SDK 与 LangGraph Trace 都会经过平台结构校验，但平台不会宣称它们能证明未被框架或 SDK 观测到的调用不存在。
+
+### Native SDK
 
 外部 Agent 以普通本地命令启动。它通过环境变量取得当前 Trial 身份、Worktree、Trace 输出路径和 Agent 输出路径：
 
@@ -86,6 +96,19 @@ AgentObserver.write_agent_output("completed", "workflow_completed")
 ```
 
 Agent 应该使用 `REGRESSION_WORKTREE` 作为项目目录，不要修改原始 Fixture。完整字段和输出限制见 [External Agent Integration Contract](EXTERNAL_AGENT_INTEGRATION_CONTRACT.md)。
+
+### LangGraph Callback
+
+LangGraph 不需要改节点、工具函数或写 `agent-output.json`。只在 Graph 启动点包裹一次：
+
+```python
+from regression_lab_observer.langgraph import LangGraphObserver
+
+with LangGraphObserver.from_environment() as observation:
+    graph.invoke(inputs, config={"callbacks": [observation.callback]})
+```
+
+只有实际通过 LangChain Model/Tool 运行的调用才会生成 `model.call`/`tool.call`；直接 Python 函数不会被猜测为工具调用。平台不会记录 Prompt、模型响应、工具参数或工具输出正文。
 
 一次 Experiment 接收一个固定的 `--external-command`。如果两个版本使用不同实现，应让这个入口根据 `REGRESSION_AGENT_VERSION` 分发到对应版本；也可以让同一入口内部选择不同策略。这样平台能把版本身份和来源 Hash 固定在同一份 Protocol 中。
 
@@ -119,7 +142,7 @@ PYTHONPATH=src:. python3.11 scripts/run_experiment.py \
 
 `project_id` 是被测项目的稳定身份，而不是用户名或 Agent 版本。新 Experiment 会将版本谱系写到 `.runtime/projects/my-project/evolution-catalog.json`，因此同一个 Agent 在不同项目上的历史不会混在一起。旧的无 `project_id` Artifact 仍可读取，但 Console 会标记为 `Legacy Catalog (no project identity)`。
 
-`run_experiment` 还会在正式执行前调用入口的 `--describe-protocol`，确认每个版本的 Prompt Profile 与哈希。可以参考 [external_openai_agent.py](../examples/external_openai_agent.py) 中的协议描述实现；只运行单个 Trial 做接入调试时，可以先使用 `run_benchmark.py`，不需要这一步。
+Native SDK 模式下，`run_experiment` 会在正式执行前调用入口的 `--describe-protocol`，确认每个版本的 Prompt Profile 与哈希。可以参考 [external_openai_agent.py](../examples/external_openai_agent.py) 中的协议描述实现。LangGraph Callback 模式不需要实现该命令：Prompt 正文不采集，协议会明确标识 Prompt Profile 未观测。只运行单个 Trial 做接入调试时，可以先使用 `run_benchmark.py`，不需要这一步。
 
 默认使用 Docker 执行平台测试；`--unsafe-trusted-host` 只适合明确可信的本地 Agent 命令。它不会把 Agent 进程变成安全沙箱。
 
@@ -158,4 +181,4 @@ Console 会展示 Experiment、Case、Trial、Behavior Diff、Failure Attributio
 
 为了让差异可解释，Baseline 与 Candidate 应只改变一个明确策略，例如“减少一次重复读取”。同一轮实验应保持 Case、Fixture、测试命令、工具策略、模型配置和 Trial 数量一致。
 
-当前 v0.2 已对 Trace、Behavior Diff、Capability、Experiment、Gate 和 Trial/Attempt 建立版本化契约与兼容测试，但尚未宣称生产级 v1.0 稳定性。新增能力先看 [Roadmap](ROADMAP.md)，不要直接修改既有 Artifact 结构。
+当前 v1.3 已对 Trace、Behavior Diff、Capability、Experiment、Gate 和 Trial/Attempt 建立版本化契约与兼容测试，但仍不宣称远程多租户生产服务稳定性。新增能力先看 [Roadmap](ROADMAP.md)，不要直接修改既有 Artifact 结构。
