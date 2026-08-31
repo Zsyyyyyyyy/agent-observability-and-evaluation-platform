@@ -1,0 +1,138 @@
+{
+  "adapter_capabilities": null,
+  "agents": [
+    {
+      "adapter": "external-command",
+      "agent_source_hash": "sha256:0e62221e38604d7254838688176474f658645f7e7067a6fde884705bd8a07b1f",
+      "agent_spec_snapshot": {
+        "agent_id": "standalone-langgraph-agent",
+        "agent_source_hash": "sha256:0e62221e38604d7254838688176474f658645f7e7067a6fde884705bd8a07b1f",
+        "agent_spec_hash": "sha256:dac2700cef55b17fdf2c5be67251f4b717db9959fa76c9b7fd4abf0079621934",
+        "capabilities": {
+          "context_trace": false,
+          "hierarchical_trace": false,
+          "mcp_trace": false,
+          "model_usage": false,
+          "schema_version": 2,
+          "test_trace": false,
+          "tool_semantics": false,
+          "tool_trace": false,
+          "trace": true,
+          "workflow_trace": false
+        },
+        "entrypoint_hash": "sha256:a797a6387154f2b783ba7b174872ae1a997a86cba07557e9773973cb984fdb35",
+        "normalized_command": [
+          "<local-path>",
+          "-m",
+          "standalone_langgraph_agent",
+          "--workspace",
+          "{workspace}",
+          "--task",
+          "{task}"
+        ],
+        "observation_mode": "blackbox",
+        "project_id": "standalone-langgraph",
+        "source_revision": "fbb51404039f79db5d57faecc870df27220d86e8",
+        "source_scope": "git_worktree",
+        "version": "v1"
+      },
+      "label": "baseline",
+      "prompt_profile": "v1",
+      "prompt_profile_source_hash": "sha256:0e62221e38604d7254838688176474f658645f7e7067a6fde884705bd8a07b1f",
+      "rendered_prompt_set_hash": "unavailable",
+      "version": "v1"
+    },
+    {
+      "adapter": "external-command",
+      "agent_source_hash": "sha256:b551034e0dfbdf146043704afb0011e9dabfc576cb6eaa4ca622ab1f435be195",
+      "agent_spec_snapshot": {
+        "agent_id": "standalone-langgraph-agent",
+        "agent_source_hash": "sha256:b551034e0dfbdf146043704afb0011e9dabfc576cb6eaa4ca622ab1f435be195",
+        "agent_spec_hash": "sha256:66fb1d94c0749f3a3325204f949ad2bff011300e72b49f32cdc89eff90a22cde",
+        "capabilities": {
+          "context_trace": false,
+          "hierarchical_trace": false,
+          "mcp_trace": false,
+          "model_usage": false,
+          "schema_version": 2,
+          "test_trace": false,
+          "tool_semantics": false,
+          "tool_trace": false,
+          "trace": true,
+          "workflow_trace": false
+        },
+        "entrypoint_hash": "sha256:a797a6387154f2b783ba7b174872ae1a997a86cba07557e9773973cb984fdb35",
+        "normalized_command": [
+          "<local-path>",
+          "-m",
+          "standalone_langgraph_agent",
+          "--workspace",
+          "{workspace}",
+          "--task",
+          "{task}"
+        ],
+        "observation_mode": "blackbox",
+        "project_id": "standalone-langgraph",
+        "source_revision": "cf0c4c2aae7a4b2077475878b175f1b8ec383418",
+        "source_scope": "git_worktree",
+        "version": "v2"
+      },
+      "label": "candidate",
+      "prompt_profile": "v2",
+      "prompt_profile_source_hash": "sha256:b551034e0dfbdf146043704afb0011e9dabfc576cb6eaa4ca622ab1f435be195",
+      "rendered_prompt_set_hash": "unavailable",
+      "version": "v2"
+    }
+  ],
+  "allowed_differences": [
+    "agents[].prompt_profile"
+  ],
+  "benchmark": {
+    "cases": [
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 24,
+          "timeout_seconds": 180
+        },
+        "case_id": "smoke_calculator_empty_input",
+        "fixture_tree_hash": "sha256:553392add405bc8ff7963e0abfd1416912973f95249cf561a2839c68a8324aa6",
+        "manifest_hash": "sha256:31a4d05b6c5201109501c3f76e58fe00877c58a55ac16e43e756d718844b0400",
+        "policy_hash": "sha256:05566087a46f45d09f1ebf7239bbf6bb55678a4464e32ca5fc459a2c51dac9a7",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      }
+    ]
+  },
+  "comparison_intent": "prompt_profile_only",
+  "execution": {
+    "schedule_seed": 20260813,
+    "trials_per_case": 3
+  },
+  "model": {
+    "base_url": "default",
+    "model": "unconfigured",
+    "provider": "openai-compatible",
+    "seed": "not_configured",
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "platform": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "python": "3.11.15",
+    "system": "Darwin"
+  },
+  "platform_source_hashes": {
+    "evaluators.py": "sha256:40b319349d550f46a82b62a90c322764f711b5a25a866dd105ba1b3213c104b4",
+    "regression_lab_tree": "sha256:dd6223648f5456ec98fbfd0a6e098ad4402523086495c88ba6e4d09f5348c429",
+    "schema.py": "sha256:15e0ca7203276c91018ee4f0e6d61734a29994fe21d2a7280763138a12fa4ed4"
+  },
+  "protocol_fingerprint": "sha256:007ae894c50941517f977c41a5a7f164b7dce5ae52815869aadf4a9b520239b5",
+  "sandbox": {
+    "bash": false,
+    "docker": false,
+    "image": null
+  },
+  "schema_version": 2,
+  "trace_schema_version": 1
+}

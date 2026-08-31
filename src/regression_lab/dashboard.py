@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from regression_lab.behavior import aggregate_behavior, summarize_trial_behavior
 from regression_lab.behavior_diff import snapshot_trial_behavior
 from regression_lab.evolution_catalog import EvolutionCatalog
+from regression_lab.trace_diff import compare_traces
 
 
 def _observed_number(value: object) -> int | float | None:
@@ -78,6 +80,7 @@ class DashboardRepository:
                 "behavior": behavior,
                 "adapter_capabilities": behavior.get("adapter_capabilities"),
                 "capability_source": behavior.get("capability_source"),
+                "evidence_provenance": behavior.get("evidence_provenance"),
                 "evidence_availability": behavior.get("evidence_availability"),
                 "behavior_snapshot": snapshot_trial_behavior(result),
             })
@@ -91,7 +94,7 @@ class DashboardRepository:
         if not result:
             return None
         result["behavior"] = summarize_trial_behavior(result)
-        trace_path = Path(str(result.get("trace_path", "")))
+        trace_path = self._artifact_path(result.get("trace_path"), candidate.parent)
         events = []
         if trace_path.is_file():
             for line in trace_path.read_text(encoding="utf-8").splitlines():
@@ -102,6 +105,32 @@ class DashboardRepository:
                 if isinstance(event, dict):
                     events.append(event)
         return {"result": result, "trace": events}
+
+    def trace_diff(self, baseline_id: str, candidate_id: str) -> dict[str, Any] | None:
+        """比较两个已选 Trial 的 Trace，不回读或改变任何运行证据。"""
+
+        baseline, candidate = self.trial(baseline_id), self.trial(candidate_id)
+        if baseline is None or candidate is None:
+            return None
+        diff = compare_traces(baseline["trace"], candidate["trace"])
+        baseline_failure = (baseline["result"].get("failure_attribution") or {}).get("failure_span")
+        candidate_failure = (candidate["result"].get("failure_attribution") or {}).get("failure_span")
+        baseline_failure_id = baseline_failure.get("span_id") if isinstance(baseline_failure, dict) else None
+        candidate_failure_id = candidate_failure.get("span_id") if isinstance(candidate_failure, dict) else None
+        # Span ID 只在单次运行内有效；失败点是否对齐必须通过同一条结构匹配记录判断。
+        aligned = baseline_failure_id is not None and candidate_failure_id is not None and any(
+            row["kind"] == "matched"
+            and row["baseline"]["span_id"] == baseline_failure_id
+            and row["candidate"]["span_id"] == candidate_failure_id
+            for row in diff["rows"]
+            if row["baseline"] and row["candidate"]
+        )
+        diff["failure_alignment"] = {
+            "baseline": baseline_failure,
+            "candidate": candidate_failure,
+            "aligned": aligned,
+        }
+        return diff
 
     def policy_stop_evidence(self) -> dict[str, Any]:
         """Summarize the V4.1 verification-stop invariant from selected Traces.
@@ -124,7 +153,7 @@ class DashboardRepository:
             candidates += 1
             if result.get("agent_exit_reason") == "verification_passed":
                 verification_passed += 1
-            trace_path = Path(str(result.get("trace_path", "")))
+            trace_path = self._artifact_path(result.get("trace_path"), path.parent)
             if not trace_path.is_file():
                 missing_policy_stops += 1
                 continue
@@ -227,24 +256,168 @@ class DashboardRepository:
             "docker": sandbox.get("docker"), "image": sandbox.get("image"),
         }
 
-    def evolution(self) -> dict[str, Any]:
-        """Return the Timeline subset for the experiment currently open in Console."""
+    def _catalog_path(self, report: dict[str, Any]) -> Path:
+        value = report.get("evolution_catalog")
+        return self._artifact_path(value, self.runtime_root) if isinstance(value, str) and value else self.runtime_root.parent / "evolution-catalog.json"
+
+    @staticmethod
+    def _artifact_path(value: object, base: Path) -> Path:
+        path = Path(str(value or ""))
+        return path if path.is_absolute() else base / path
+
+    def context(self) -> dict[str, Any]:
+        """Resolve one immutable Console scope from the Runtime Artifact."""
 
         report = self.latest_experiment() or {}
-        catalog_path = report.get("evolution_catalog")
-        if not isinstance(catalog_path, str) or not catalog_path:
-            catalog_path = str(self.runtime_root.parent / "evolution-catalog.json")
-        experiment_id = report.get("evolution_experiment_id")
+        raw = report.get("evaluation_context")
+        agents = report.get("agents") if isinstance(report.get("agents"), list) else []
+        by_label = {item.get("id"): item for item in agents if isinstance(item, dict)}
+        baseline = by_label.get(report.get("baseline_id"), {})
+        candidate = by_label.get(report.get("candidate_id"), {})
+        if not baseline and agents:
+            baseline = agents[0] if isinstance(agents[0], dict) else {}
+        if not candidate and len(agents) > 1:
+            candidate = agents[1] if isinstance(agents[1], dict) else {}
+        fallback = {
+            "schema_version": 1,
+            "project_id": report.get("project_id") if isinstance(report.get("project_id"), str) else None,
+            "agent_id": None,
+            "experiment_id": report.get("evolution_experiment_id") if isinstance(report.get("evolution_experiment_id"), str) else None,
+            "baseline_version": baseline.get("version") if isinstance(baseline.get("version"), str) else None,
+            "candidate_version": candidate.get("version") if isinstance(candidate.get("version"), str) else None,
+            "legacy": True,
+            "scope_status": "legacy_unknown",
+            "source": "legacy_artifact",
+        }
+        if isinstance(raw, dict):
+            return {**fallback, **{field: raw.get(field, fallback[field]) for field in fallback}}
+
+        catalog_path = self._catalog_path(report)
+        if catalog_path.is_file():
+            try:
+                document = EvolutionCatalog(catalog_path).load()
+            except ValueError:
+                document = {}
+            versions = {
+                item.get("version") for item in (baseline, candidate)
+                if isinstance(item, dict) and isinstance(item.get("version"), str)
+            }
+            matches = {
+                item.get("agent_id") for item in document.get("versions", [])
+                if isinstance(item, dict) and item.get("version") in versions and isinstance(item.get("agent_id"), str)
+            }
+            if len(matches) == 1:
+                fallback["agent_id"] = matches.pop()
+                fallback["scope_status"] = "inferred"
+        return fallback
+
+    def validate_runtime_context(self) -> dict[str, Any]:
+        """Verify that Runtime facts still belong to the declared Experiment."""
+
+        report = self.latest_experiment() or {}
+        context = self.context()
+        if context["legacy"]:
+            return {"available": True, "context": context}
+
+        agents = report.get("agents") if isinstance(report.get("agents"), list) else []
+        by_label = {item.get("id"): item for item in agents if isinstance(item, dict)}
+        baseline = by_label.get(report.get("baseline_id"), {})
+        candidate = by_label.get(report.get("candidate_id"), {})
+        expected = {
+            "project_id": report.get("project_id"),
+            "experiment_id": report.get("evolution_experiment_id"),
+            "baseline_version": baseline.get("version"),
+            "candidate_version": candidate.get("version"),
+        }
+        mismatches = [
+            field for field, value in expected.items()
+            if isinstance(value, str) and context.get(field) != value
+        ]
+
+        protocol = self._read_report("protocol.json") or {}
+        protocol_agents = protocol.get("agents") if isinstance(protocol.get("agents"), list) else []
+        observed_agent_ids = {
+            item.get("agent_spec_snapshot", {}).get("agent_id")
+            for item in protocol_agents if isinstance(item, dict)
+            and isinstance(item.get("agent_spec_snapshot"), dict)
+            and isinstance(item["agent_spec_snapshot"].get("agent_id"), str)
+        }
+        if context.get("agent_id") and observed_agent_ids and observed_agent_ids != {context["agent_id"]}:
+            mismatches.append("agent_id")
+        if mismatches:
+            runtime = {
+                **expected,
+                "agent_id": observed_agent_ids.pop() if len(observed_agent_ids) == 1 else None,
+            }
+            return {
+                "available": False,
+                "reason": "runtime_context_mismatch",
+                "context": {**context, "scope_status": "mismatch"},
+                "runtime": runtime,
+            }
+        return {"available": True, "context": context}
+
+    def runtime_response(self, loader: Callable[[], Any]) -> dict[str, Any]:
+        """Return Runtime Evidence only after its Experiment Context is verified."""
+
+        validation = self.validate_runtime_context()
+        if not validation["available"]:
+            return {
+                "available": False, "reason": validation["reason"], "data": {}, "context": validation["context"],
+                **({"runtime": validation["runtime"]} if "runtime" in validation else {}),
+            }
+        return {"available": True, "data": loader(), "context": validation["context"]}
+
+    def evolution(self) -> dict[str, Any]:
+        """Return Catalog history only when it belongs to the current Console Context."""
+
+        report = self.latest_experiment() or {}
+        context = self.context()
+        catalog_path = self._catalog_path(report)
+        if not catalog_path.is_file():
+            return {"available": False, "reason": "catalog_missing", "context": context, "versions": [], "experiments": [], "gate_decisions": []}
         catalog = EvolutionCatalog(catalog_path)
         try:
-            catalog.load()
+            document = catalog.load()
         except ValueError:
-            return {"available": False, "reason": "catalog_invalid", "versions": [], "experiments": [], "gate_decisions": []}
-        if not Path(catalog_path).exists():
-            return {"available": False, "reason": "catalog_missing", "versions": [], "experiments": [], "gate_decisions": []}
-        timeline = catalog.timeline(experiment_id if isinstance(experiment_id, str) else None)
+            return {"available": False, "reason": "catalog_invalid", "context": context, "versions": [], "experiments": [], "gate_decisions": []}
+
+        catalog_project = document.get("project") if isinstance(document.get("project"), dict) else {}
+        if context["project_id"] and catalog_project.get("project_id") not in {None, context["project_id"]}:
+            return {"available": False, "reason": "runtime_catalog_context_mismatch", "context": {**context, "scope_status": "mismatch"}, "versions": [], "experiments": [], "gate_decisions": []}
+
+        experiment_id = context["experiment_id"]
+        if isinstance(experiment_id, str):
+            current = next((item for item in document["experiments"] if item.get("experiment_id") == experiment_id), None)
+            if current is None:
+                return {"available": False, "reason": "catalog_experiment_missing", "context": context, "versions": [], "experiments": [], "gate_decisions": []}
+            version_ids = {current.get("baseline_version_id"), current.get("candidate_version_id")}
+            agent_ids = {
+                item.get("agent_id") for item in document["versions"]
+                if item.get("version_id") in version_ids and isinstance(item.get("agent_id"), str)
+            }
+            if context["agent_id"] and agent_ids != {context["agent_id"]}:
+                return {"available": False, "reason": "runtime_catalog_context_mismatch", "context": {**context, "scope_status": "mismatch"}, "versions": [], "experiments": [], "gate_decisions": []}
+            timeline = catalog.timeline(experiment_id)
+        elif isinstance(context["agent_id"], str):
+            # 历史 Artifact 没有 Experiment ID 时，只展示能由同一版本对唯一定位的谱系。
+            timeline = catalog.timeline(agent_id=context["agent_id"])
+        else:
+            return {"available": False, "reason": "legacy_context_unresolved", "context": context, "versions": [], "experiments": [], "gate_decisions": []}
+        if not timeline["experiments"]:
+            return {
+                "available": False, "reason": "catalog_lineage_missing", "catalog_path": catalog_path.name,
+                "context": context, "versions": [], "experiments": [], "gate_decisions": [],
+            }
+        current_experiment_id = timeline["current_experiment_id"]
         return {
-            "available": bool(timeline["experiments"]), "catalog_path": Path(catalog_path).name,
+            "available": True,
+            "catalog_path": catalog_path.name,
+            "context": context,
+            "ledger_experiments": [
+                item for item in timeline["experiments"]
+                if item.get("experiment_id") == current_experiment_id
+            ],
             **timeline,
         }
 

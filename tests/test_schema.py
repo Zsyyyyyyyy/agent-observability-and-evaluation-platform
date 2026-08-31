@@ -79,6 +79,36 @@ class TraceSchemaTests(unittest.TestCase):
         self.assertFalse(validation.valid)
         self.assertTrue(any("unsupported span_type" in error for error in validation.errors))
 
+    def test_malformed_attributes_are_rejected_without_crashing_identity_checks(self):
+        records = [
+            event(1, "span_start", span_id="root", parent_span_id=None, name="agent.run", attributes=["invalid"]),
+            event(2, "span_end", span_id="root", status="ok", attributes="invalid"),
+        ]
+
+        validation = validate_events(
+            records,
+            expected_trial_id="trial-1",
+            expected_root_attributes={"agent_version": "v1"},
+        )
+
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("attributes must be an object" in error for error in validation.errors))
+
+    def test_children_and_events_cannot_outlive_their_parent_span(self):
+        records = [
+            event(1, "span_start", span_id="root", parent_span_id=None, name="agent.run", attributes={}),
+            event(2, "span_start", span_id="child", parent_span_id="root", name="tool.call", attributes={}),
+            event(3, "span_end", span_id="root", status="ok", attributes={}),
+            event(4, "event", name="tool.output", parent_span_id="root", attributes={}),
+            event(5, "span_end", span_id="child", status="ok", attributes={}),
+        ]
+
+        validation = validate_events(records)
+
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("before child span ended" in error for error in validation.errors))
+        self.assertTrue(any("event parent span has already ended" in error for error in validation.errors))
+
 
 if __name__ == "__main__":
     unittest.main()

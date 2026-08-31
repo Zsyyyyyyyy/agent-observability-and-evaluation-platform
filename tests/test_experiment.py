@@ -156,6 +156,45 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(hydrated["jobs"][0]["behavior"]["capability_source"], "historical_unknown")
         self.assertIsNone(hydrated["jobs"][0]["behavior_snapshot"]["tool_calls"])
 
+    def test_report_only_recomputes_legacy_behavior_projection_with_trace_evidence(self):
+        with TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            trial_dir = case_dir / "case_trial_001"
+            trial_dir.mkdir()
+            trace = trial_dir / "trace.jsonl"
+            trace.write_text(
+                json.dumps({
+                    "kind": "span_start", "event_seq": 1, "span_id": "tool",
+                    "name": "tool.call", "attributes": {"tool_name": "glob"},
+                }) + "\n" + json.dumps({
+                    "kind": "span_end", "event_seq": 2, "span_id": "tool",
+                    "status": "ok", "attributes": {},
+                }),
+                encoding="utf-8",
+            )
+            (trial_dir / "result.json").write_text(json.dumps({
+                "adapter_id": "external-command",
+                "trace_path": str(trace),
+                "behavior": {
+                    "tool_calls": 1,
+                    "tool_success_rate": 1.0,
+                    "availability": {"tool_outcomes": True},
+                },
+            }), encoding="utf-8")
+            hydrated = _hydrate_trial_diagnostics(
+                {"jobs": [{"job_id": "case_trial_001", "behavior": {
+                    "tool_calls": 1,
+                    "tool_success_rate": 1.0,
+                    "availability": {"tool_outcomes": True},
+                }}]},
+                case_dir,
+            )
+
+        behavior = hydrated["jobs"][0]["behavior"]
+        self.assertEqual(behavior["capability_source"], "registry_fallback")
+        self.assertEqual(behavior["evidence_availability"]["tool_outcomes"], "available")
+        self.assertEqual(behavior["tool_success_rate"], 1.0)
+
     def test_report_only_hydrates_selected_attempt_source_identity(self):
         with TemporaryDirectory() as directory:
             case_dir = Path(directory)

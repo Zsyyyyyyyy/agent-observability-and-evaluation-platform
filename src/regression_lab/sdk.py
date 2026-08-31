@@ -15,7 +15,7 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any
 
-from regression_lab.trace import SPAN_TYPES, TraceCollector
+from regression_lab_observer.trace import JsonlTraceWriter, SPAN_TYPES
 
 
 _current_span: ContextVar[tuple["AgentObserver", str] | None] = ContextVar("regression_lab_current_span", default=None)
@@ -73,7 +73,7 @@ class AgentObserver:
     def __init__(self, trace_path: str | Path, trace_id: str, *, trial_id: str, case_id: str,
                  agent_version: str, adapter_id: str, agent_profile: str | None = None):
         try:
-            self.trace: TraceCollector | None = TraceCollector(trace_path, trace_id)
+            self.trace: JsonlTraceWriter | None = JsonlTraceWriter(trace_path, trace_id)
         except OSError:
             # Observation must not replace an Agent's primary result with an
             # SDK filesystem failure. The Adapter fails missing evidence closed.

@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -185,6 +186,28 @@ class EvolutionSchemaTests(unittest.TestCase):
         self.assertEqual(history["versions"][1]["parent_version_id"], history["versions"][0]["version_id"])
         self.assertEqual(history["versions"][1]["change_summary"], "prompt")
         self.assertEqual(history["versions"][1]["snapshot"]["prompt_profile"], "observe-plan-act-verify-v2")
+
+    def test_project_scoped_catalog_records_project_identity(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "experiment"
+            trial = root / "baseline" / "case" / "case_trial_001"; trial.mkdir(parents=True)
+            (trial / "result.json").write_text(json.dumps({"trial_id": "case_trial_001", "status": "completed"}), encoding="utf-8")
+            report = {
+                "metrics_version": 3, "trial_count_required_per_case": 1, "project_id": "coding-agent-platform",
+                "agents": [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                "summaries": {"baseline": {"jobs": [{"job_id": "case_trial_001", "case_id": "case", "trial_index": 1}]}, "candidate": {"jobs": []}},
+            }
+            catalog = EvolutionCatalog(Path(directory) / "projects" / "coding-agent-platform" / "evolution-catalog.json")
+            catalog.index_experiment(report, artifact_root=root, manifests=[{"id": "case", "version": 1, "fixture": {}, "task": {}, "tool_policy": {}}], project_id="coding-agent-platform")
+            document = catalog.load()
+
+        self.assertEqual(document["project"], {"project_id": "coding-agent-platform"})
+        self.assertTrue(all(item["project_id"] == "coding-agent-platform" for item in document["versions"]))
+        self.assertEqual(document["experiments"][0]["project_id"], "coding-agent-platform")
+        identity = document["experiments"][0]["evaluation_context"]["identity"]
+        self.assertEqual(identity["project_id"], "coding-agent-platform")
+        self.assertEqual(identity["baseline_version"], "v1")
+        self.assertEqual(identity["candidate_version"], "v2")
 
 
 if __name__ == "__main__":

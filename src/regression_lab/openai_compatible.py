@@ -87,18 +87,43 @@ class OpenAICompatibleClient:
             raise ModelClientError(f"model request failed: {type(exc).__name__}", kind="network") from exc
         except json.JSONDecodeError as exc:
             raise ModelClientError("model returned invalid JSON", kind="invalid_response") from exc
+        return parse_chat_completion(payload)
+
+
+def parse_chat_completion(payload: dict[str, Any]) -> ModelReply:
+    """Parse the provider-neutral Chat Completions subset used by Agent loops."""
+
+    try:
+        choice = payload["choices"][0]
+        message = choice["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ModelClientError(
+            "model response is missing choices[0].message", kind="invalid_response"
+        ) from exc
+    if not isinstance(message, dict):
+        raise ModelClientError("model response message must be an object", kind="invalid_response")
+    calls: list[ToolCall] = []
+    for item in message.get("tool_calls") or []:
+        function = item.get("function") if isinstance(item, dict) else None
         try:
-            choice, message = payload["choices"][0], payload["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ModelClientError("model response is missing choices[0].message", kind="invalid_response") from exc
-        calls: list[ToolCall] = []
-        for item in message.get("tool_calls") or []:
-            try:
-                function = item["function"]
-                arguments = json.loads(function["arguments"] or "{}")
-                if not isinstance(arguments, dict): raise TypeError
-                calls.append(ToolCall(str(item["id"]), str(function["name"]), arguments))
-            except (KeyError, TypeError, json.JSONDecodeError) as exc:
-                raise ModelClientError("model returned an invalid tool call", kind="invalid_tool_call") from exc
-        usage = payload.get("usage") or {}
-        return ModelReply(str(message.get("content") or ""), tuple(calls), choice.get("finish_reason"), {key: int(value) for key, value in usage.items() if key in {"prompt_tokens", "completion_tokens", "total_tokens"} and isinstance(value, int)})
+            arguments = json.loads(function["arguments"] or "{}")
+            if not isinstance(arguments, dict):
+                raise TypeError("arguments must be an object")
+            calls.append(ToolCall(str(item["id"]), str(function["name"]), arguments))
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ModelClientError(
+                "model returned an invalid tool call", kind="invalid_tool_call"
+            ) from exc
+    usage = payload.get("usage") or {}
+    return ModelReply(
+        str(message.get("content") or ""),
+        tuple(calls),
+        choice.get("finish_reason"),
+        {
+            key: int(value)
+            for key, value in usage.items()
+            if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        },
+    )

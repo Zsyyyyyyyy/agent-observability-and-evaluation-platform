@@ -6,11 +6,43 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from regression_lab.store import RunStore
+from scripts.run_benchmark import _timed_out_result
+
 
 REGRESSION = Path(__file__).resolve().parents[1]
 
 
 class RunnerSafetyTests(unittest.TestCase):
+    def test_quiet_dry_run_keeps_success_output_empty(self):
+        completed = subprocess.run(
+            [
+                sys.executable, "scripts/run_benchmark.py",
+                "--manifest", "benchmarks/smoke-case-design.yaml",
+                "--dry-run", "--quiet",
+            ],
+            cwd=REGRESSION,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "")
+
+    def test_parent_timeout_result_is_storeable_and_fails_trace_closed(self):
+        with TemporaryDirectory() as directory:
+            result = _timed_out_result({"job_id": "case_trial_001"}, 30)
+            result["attempt_id"] = "attempt_001"
+            store = RunStore(Path(directory) / "runs.db")
+
+            store.record_selected_projection(result, [], "attempt_001")
+
+            persisted = store.get_trial("case_trial_001")
+        self.assertEqual(persisted["status"], "timed_out")
+        self.assertTrue(persisted["trace_id"].startswith("trace_parent_timeout_"))
+        self.assertFalse(persisted["trace_validation"]["valid"])
+
     def test_runner_refuses_unowned_existing_job_directory(self):
         with TemporaryDirectory() as directory:
             output = Path(directory)

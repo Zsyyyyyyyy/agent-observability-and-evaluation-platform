@@ -1,0 +1,388 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "verification_passed",
+  "agent_profile": "bounded-success-stop-verify-v4-1",
+  "agent_response": "Verification command passed; execution stopped by the V4.1 success policy.",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v4.1",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 7,
+    "denied_tool_attempts": 0,
+    "duplicate_read_rate": 0.0,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.14285714285714285,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 3,
+        "denied": 0,
+        "error": 0,
+        "ok": 3
+      }
+    },
+    "tool_calls": 7,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 1.0,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 18
+  },
+  "changed_files": [
+    "src/loader.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 3,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_current_snapshot_keeps_its_fields (test_loader.ProfileMigrationTests.test_current_snapshot_keeps_its_fields) ... ok\ntest_v1_snapshot_migrates_legacy_name (test_loader.ProfileMigrationTests.test_v1_snapshot_migrates_legacy_name) ... ok\ntest_v1_snapshot_without_settings_gets_a_new_empty_mapping (test_loader.ProfileMigrationTests.test_v1_snapshot_without_settings_gets_a_new_empty_mapping) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/loader.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 25,
+          "span_count": 12,
+          "trace_id": "trace_4a65a08b2d99",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_4a65a08b2d99"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 4,
+          "binary": false,
+          "deleted_lines": 2,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/loader.py"
+          ],
+          "patch": "diff --git a/src/loader.py b/src/loader.py\nindex 55f2de9..5f88d5f 100644\n--- a/src/loader.py\n+++ b/src/loader.py\n@@ -4,10 +4,12 @@ from src.schema import CURRENT_VERSION, empty_settings\n def load_profile(payload):\n     \"\"\"Load a persisted profile into the current v2 shape.\"\"\"\n \n-    # BUG: version-1 snapshots stored ``name`` instead of ``display_name``.\n+    # Version-1 snapshots stored ``name`` instead of ``display_name``.\n+    legacy = payload.get(\"version\") == 1\n+    display_name = payload[\"name\"] if legacy else payload[\"display_name\"]\n     return {\n         \"version\": CURRENT_VERSION,\n         \"id\": payload[\"id\"],\n-        \"display_name\": payload[\"display_name\"],\n+        \"display_name\": display_name,\n         \"settings\": payload.get(\"settings\", empty_settings()),\n     }\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [],
+          "missing_end": [],
+          "tool_calls": 7,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 12378.346,
+          "tool_calls": 7,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 18
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/loader.py b/src/loader.py\nindex 55f2de9..5f88d5f 100644\n--- a/src/loader.py\n+++ b/src/loader.py\n@@ -4,10 +4,12 @@ from src.schema import CURRENT_VERSION, empty_settings\n def load_profile(payload):\n     \"\"\"Load a persisted profile into the current v2 shape.\"\"\"\n \n-    # BUG: version-1 snapshots stored ``name`` instead of ``display_name``.\n+    # Version-1 snapshots stored ``name`` instead of ``display_name``.\n+    legacy = payload.get(\"version\") == 1\n+    display_name = payload[\"name\"] if legacy else payload[\"display_name\"]\n     return {\n         \"version\": CURRENT_VERSION,\n         \"id\": payload[\"id\"],\n-        \"display_name\": payload[\"display_name\"],\n+        \"display_name\": display_name,\n         \"settings\": payload.get(\"settings\", empty_settings()),\n     }\n",
+  "git_evidence": {
+    "base_revision": "a48d5534ddb897204315e885935aba8019c96151",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/loader.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 1356,
+    "prompt_tokens": 5879,
+    "total_tokens": 7235
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 40,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_current_snapshot_keeps_its_fields (test_loader.ProfileMigrationTests.test_current_snapshot_keeps_its_fields) ... ok\ntest_v1_snapshot_migrates_legacy_name (test_loader.ProfileMigrationTests.test_v1_snapshot_migrates_legacy_name) ... ok\ntest_v1_snapshot_without_settings_gets_a_new_empty_mapping (test_loader.ProfileMigrationTests.test_v1_snapshot_without_settings_gets_a_new_empty_mapping) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/loader.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 25,
+        "span_count": 12,
+        "trace_id": "trace_4a65a08b2d99",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_4a65a08b2d99"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 4,
+        "binary": false,
+        "deleted_lines": 2,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/loader.py"
+        ],
+        "patch": "diff --git a/src/loader.py b/src/loader.py\nindex 55f2de9..5f88d5f 100644\n--- a/src/loader.py\n+++ b/src/loader.py\n@@ -4,10 +4,12 @@ from src.schema import CURRENT_VERSION, empty_settings\n def load_profile(payload):\n     \"\"\"Load a persisted profile into the current v2 shape.\"\"\"\n \n-    # BUG: version-1 snapshots stored ``name`` instead of ``display_name``.\n+    # Version-1 snapshots stored ``name`` instead of ``display_name``.\n+    legacy = payload.get(\"version\") == 1\n+    display_name = payload[\"name\"] if legacy else payload[\"display_name\"]\n     return {\n         \"version\": CURRENT_VERSION,\n         \"id\": payload[\"id\"],\n-        \"display_name\": payload[\"display_name\"],\n+        \"display_name\": display_name,\n         \"settings\": payload.get(\"settings\", empty_settings()),\n     }\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [],
+        "missing_end": [],
+        "tool_calls": 7,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 12378.346,
+        "tool_calls": 7,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 18
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 263.06441705673933,
+  "test_exit_code": 0,
+  "test_stderr": "test_current_snapshot_keeps_its_fields (test_loader.ProfileMigrationTests.test_current_snapshot_keeps_its_fields) ... ok\ntest_v1_snapshot_migrates_legacy_name (test_loader.ProfileMigrationTests.test_v1_snapshot_migrates_legacy_name) ... ok\ntest_v1_snapshot_without_settings_gets_a_new_empty_mapping (test_loader.ProfileMigrationTests.test_v1_snapshot_without_settings_gets_a_new_empty_mapping) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_4a65a08b2d99",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 25,
+    "span_count": 12,
+    "trace_id": "trace_4a65a08b2d99",
+    "valid": true
+  },
+  "trial_id": "profile_v1_migration_trial_003"
+}

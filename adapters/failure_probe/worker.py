@@ -90,7 +90,9 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         trace.end_span(root, status=result["status"], duration_ms=round((time.monotonic() - started) * 1000, 3))
         result["trace_validation"] = validate_trace(result["trace_path"], expected_trace_id=trace.trace_id, expected_trial_id=trial_id).as_dict()
         result["trace_summary"] = trace.summary()
-        result["evaluation"] = evaluate_baseline(result)
+        result["evaluation"] = evaluate_baseline(
+            result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),
+        )
         result["scores"] = result["evaluation"]["scores"]
         if spec.get("run_store"):
             RunStore(spec["run_store"]).record_run(result, result["scores"])

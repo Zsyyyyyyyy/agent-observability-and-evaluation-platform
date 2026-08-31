@@ -11,6 +11,8 @@ Regression Lab 当前使用依赖无关的 JSONL Trace。每行是一个事件�
 
 `span_start` 必须包含 `span_id`、`name` 和 `attributes`；v1 新增 `span_type`，取值为 `agent`、`llm`、`tool`、`test`、`retrieval`、`context`、`workflow`、`mcp` 或 `other`。`span_end` 必须包含同名 `span_id`、`status` 和 `attributes`。每个 Span 必须恰好有一个结束事件；一个 Trace 至多只能有一个根 Span。普通 `event` 必须包含 `name`，并可通过 `parent_span_id` 关联 Span。
 
+`attributes` 必须是 JSON Object。父 Span 必须已经开始且尚未结束；存在未关闭子 Span 时不能先关闭父 Span，结束后的 Span 也不能再接收子 Span或 Event。校验器把这些因果顺序错误标记为不完整证据，而不是让下游 Evaluator 尝试解释畸形 Trace。
+
 ## 嵌套 Span
 
 SDK 使用当前上下文自动关联父 Span：

@@ -1,0 +1,160 @@
+/*
+ * Release cockpit visual system.
+ * Azure carries navigation and observed data; coral is reserved for risk so
+ * users can scan a release decision without treating every number as an alarm.
+ */
+:root {
+  --ink: #182238;
+  --paper: #eef2f8;
+  --sheet: #ffffff;
+  --line: #d9e1ef;
+  --signal: #e76f75;
+  --ok: #16866d;
+  --muted: #65718a;
+  --mint: #c6f0df;
+  --azure: #5d79ed;
+  --violet: #7166d9;
+  --surface-soft: #f7f9fd;
+  --shadow: 0 14px 36px rgba(39, 57, 96, .09);
+}
+
+body { background: radial-gradient(circle at 84% -10%, #dce5ff 0, transparent 31rem), var(--paper); }
+.masthead { position: sticky; top: 0; z-index: 10; height: 64px; padding: 0 max(28px, 5.5vw); border: 0; background: rgba(19, 28, 47, .96); box-shadow: 0 1px 0 rgba(255,255,255,.1); backdrop-filter: blur(18px); }
+.wordmark { display: flex; align-items: center; gap: 7px; font-weight: 500; letter-spacing: .055em; }
+.wordmark b { margin: 0; padding: 4px 7px; border-radius: 6px; background: linear-gradient(135deg, var(--azure), var(--violet)); box-shadow: 0 4px 12px rgba(96,117,230,.35); }
+.masthead p { color: #bdc9e5; opacity: 1; }
+.connection { color: #8de1c2; }
+main { max-width: 1480px; padding: 46px max(28px, 5.5vw) 80px; }
+.hero, .studio-hero { align-items: center; padding: 22px 0 32px; border: 0; }
+.eyebrow { color: var(--azure); font-weight: 500; letter-spacing: .12em; }
+h1 { max-width: 760px; color: var(--ink); font-size: clamp(42px, 5vw, 74px); line-height: .98; letter-spacing: -.062em; }
+h1 em { color: var(--azure); font-style: normal; }
+h2 { font-size: 21px; }
+
+.gate-card { width: 304px; min-height: 142px; border: 1px solid #ced8ed; border-radius: 16px; background: linear-gradient(145deg, #fff, #f4f7ff); box-shadow: var(--shadow); }
+.gate-card strong, .metrics strong { color: var(--ink); }
+.metrics { overflow: hidden; margin: 20px 0 26px; border: 1px solid var(--line); border-radius: 14px; background: var(--sheet); box-shadow: 0 6px 18px rgba(39,57,96,.045); }
+.metrics article { padding: 17px 20px; border: 0; border-right: 1px solid var(--line); }
+.metrics article:last-child { border-right: 0; }
+.metrics strong { font-size: 29px; }
+
+.panel, .decision-spine { border: 1px solid var(--line); border-radius: 14px; background: var(--sheet); box-shadow: var(--shadow); }
+.panel-head, .decision-spine-head { align-items: center; padding: 18px 22px; border-color: var(--line); }
+.panel-head { background: linear-gradient(100deg, #fff, #fafbff); border-radius: 14px 14px 0 0; }
+.panel-note, .aside-note { color: var(--muted); }
+button, select { border-color: #cbd6eb; border-radius: 8px; background: #fff; color: var(--ink); transition: border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease; }
+button:hover, button:focus { border-color: var(--azure); background: #eff3ff; color: #304fc8; outline: 0; box-shadow: 0 0 0 3px rgba(93,121,237,.16); }
+button:active { transform: translateY(1px); }
+
+.comparison-row { border-color: #e4e9f3; }
+.comparison-row:hover, .comparison-row.selected { background: #f4f7ff; }
+.comparison-row.selected { box-shadow: inset 4px 0 0 var(--azure); }
+.comparison-row > span { border-color: #e4e9f3; }
+.baseline-label, .baseline-key, .evidence-values .baseline-value { color: #6273ae; }
+.candidate-label, .candidate-key, .evidence-values .candidate-value { color: var(--ok); }
+.workspace { gap: 22px; grid-template-columns: minmax(0, 2.35fr) minmax(280px, .9fr); }
+.reliability-panel { padding: 22px; background: linear-gradient(180deg, #fff, #f9fbff); }
+
+.decision-spine { overflow: hidden; margin-top: 18px; }
+.decision-spine-head { border-color: var(--line); }
+.decision-spine-content::before { background: #cfd9ef; }
+.spine-stop { border-color: var(--line); }
+.spine-index { border-color: #cbd6eb; background: #fff; color: var(--azure); }
+.spine-stop.positive .spine-index { border-color: var(--ok); background: var(--ok); }
+.spine-stop.negative .spine-index { border-color: var(--signal); background: var(--signal); }
+.spine-stop.warning .spine-index { border-color: #e5aa51; background: #fff2d7; color: #a1600b; }
+.spine-stop.positive > strong { color: var(--ok); }
+.spine-stop.negative > strong { color: var(--signal); }
+.spine-stop.warning > strong { color: #a1600b; }
+.primary-stop:hover, .primary-stop:focus { background: #243452; box-shadow: none; outline: 0; }
+
+.evidence-deck { gap: 22px; margin-top: 22px; }
+.evidence-content { padding: 16px 22px 18px; }
+.evidence-row, .case-signal-list, .case-signal, .stat-verdict, .stat-grid, .behavior-row, .behavior-summary-list { border-color: #e4e9f3; }
+.case-signal:hover, .case-signal:focus { background: #f4f7ff; }
+
+/* 统计结论不是第四个并列读数：横向排列能让结论、置信区间与适用范围在一次扫读中成立。 */
+.statistics-panel { grid-column: 1 / -1; }
+.statistics-panel .evidence-content {
+  display: grid;
+  grid-template-columns: minmax(220px, .75fr) minmax(310px, 1.15fr) minmax(240px, .9fr);
+  align-items: center;
+  min-height: 150px;
+  padding: 0 22px;
+}
+.statistics-panel .stat-verdict {
+  min-height: 0;
+  padding: 18px 22px 18px 0;
+  border-bottom: 0;
+}
+.statistics-panel .stat-grid {
+  margin: 0;
+  padding: 0 22px;
+  border-top: 0;
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+.statistics-panel .evidence-note { margin: 0; padding-left: 22px; }
+@media (max-width: 920px) {
+  .statistics-panel .evidence-content { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
+  .statistics-panel .evidence-note { grid-column: 1 / -1; padding: 0 0 16px; }
+}
+.console-context, .case-controls, .case-behavior-head { border-color: var(--line); background: #f6f8ff; }
+.console-context { border-radius: 12px; }
+.runtime-context-error { border-color: #f0b7bb; border-radius: 12px; background: #fff7f7; }
+.case-diagnosis { background: #fffaf0; border-color: #f0dfbd; }
+.detail-stats { background: var(--surface-soft); border-color: var(--line); }
+.chip { border-radius: 6px; background: #edf2ff; color: #475ba7; }
+.trial-row:hover, .trial-row:focus { background: #f1f5ff; outline-color: var(--azure); }
+.status { border-radius: 999px; }
+
+/* Trace is the inspection surface: hierarchy stays quiet while selected spans
+   receive the same blue focus treatment as the rest of the release cockpit. */
+.detail-section-head { background: #f7f9fd; border-color: var(--line); }
+.detail-grid, .detail-grid section + section { border-color: var(--line); }
+#trace-list.trace-tree .trace-tree-event { border-color: #e4e9f3; }
+.trace-tree-event::before, .trace-tree-event::after { background: #d7e0ef; }
+.trace-tree-event:hover { background: #f4f7ff; }
+.trace-kind { color: var(--azure); }
+.trace-view-tabs { border-color: #cbd6eb; border-radius: 8px; overflow: hidden; }
+.trace-view-tabs button[aria-selected="true"] { background: var(--azure); color: #fff; }
+.trace-card { border-color: #dfe6f2; background: #fbfcff; }
+.candidate-bar, .candidate-swatch { background: var(--azure); }
+.baseline-bar, .baseline-swatch { background: #7182bd; }
+.bar-chart { border-color: #cbd6eb; }
+.chart-bars { border-color: #dce4f1; background: repeating-linear-gradient(to top, transparent 0, transparent 51px, #e8edf6 52px); }
+
+/* Studio keeps editable inputs brighter than the Console's read-only evidence. */
+.studio-main { max-width: 1260px; }
+.studio-hero > p { padding: 15px 18px; border: 1px solid #d9e1ef; border-radius: 12px; background: rgba(255,255,255,.7); box-shadow: 0 8px 22px rgba(39,57,96,.05); }
+.launch-lane { gap: 12px; padding: 12px 14px; border: 1px solid #d9e1ef; border-radius: 12px; background: rgba(255,255,255,.65); color: #556584; }
+.launch-lane span { white-space: nowrap; }.launch-lane i { background: #cbd6eb; }
+.studio-grid { gap: 22px; }.studio-panel { overflow: hidden; }.studio-body { gap: 17px; padding: 22px; }.studio-body label { color: #586783; }
+input[type=text], select { min-height: 40px; border-color: #cbd6eb; border-radius: 8px; background: #fff; }
+input[type=text]:focus, select:focus { border-color: var(--azure); outline: 0; box-shadow: 0 0 0 3px rgba(93,121,237,.15); }
+.setup-switch, .local-setup { border-color: var(--line); background: #f8faff; }
+.setup-switch label { transition: background .18s ease; }.setup-switch label:hover { background: #eff3ff; }
+.setup-switch input, .benchmark-choice input, .choice input, .confirm input { accent-color: var(--azure); }
+.benchmark-list { padding: 0 22px; }.benchmark-choice { border-color: #e4e9f3; }.benchmark-choice:hover { background: #f7f9ff; }
+.choice { border-color: #d8e1f0; border-radius: 9px; background: #fbfcff; }.choice:hover { border-color: #aebeee; background: #f3f6ff; }
+.preflight-result { border-top: 1px solid var(--line); background: #fbfcff; }.preflight-result.valid { background: #effaf5; }
+.studio-actions { border-color: var(--line); background: #f8faff; }
+.studio-actions button:last-child { border-color: var(--azure); background: var(--azure); box-shadow: 0 5px 12px rgba(93,121,237,.22); }
+.studio-actions button:last-child:hover, .studio-actions button:last-child:focus { background: #4d68d9; color: #fff; }
+.run-log { border-color: var(--line); border-radius: 0 0 14px 14px; background: #182238; color: #dce5f8; }
+footer { background: #182238; color: #aebbd4; }
+
+/* Evolution may contain many releases. Its horizontal rail is intentional,
+   but it must scroll inside the card instead of widening the whole viewport. */
+.evolution-panel, #case-detail-panel { overflow: hidden; }
+
+@media (max-width: 880px) { .metrics { grid-template-columns: repeat(3, 1fr); }.metrics article:nth-child(3) { border-right: 0; } }
+@media (max-width: 640px) {
+  .masthead { height: 58px; padding: 0 18px; } main { padding: 28px 18px 56px; }.hero { padding-top: 8px; }
+  .metrics { border-radius: 12px; }.metrics article:nth-child(2) { border-right: 0; }.metrics article:nth-child(3) { border-right: 1px solid var(--line); }
+  .panel, .decision-spine, .gate-card { border-radius: 12px; }
+  .statistics-panel .evidence-content { grid-template-columns: 1fr; align-items: start; padding: 0 18px; }
+  .statistics-panel .stat-verdict { padding: 16px 0 14px; }
+  .statistics-panel .stat-grid { padding: 0; border-right: 0; border-left: 0; border-top: 1px solid var(--line); }
+  .statistics-panel .evidence-note { padding: 14px 0 16px; }
+}

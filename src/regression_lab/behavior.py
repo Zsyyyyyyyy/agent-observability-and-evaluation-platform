@@ -152,6 +152,7 @@ def summarize_trial_behavior(result: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "version": 1,
+        "evidence_provenance": result.get("evidence_provenance") if isinstance(result.get("evidence_provenance"), dict) else {},
         "adapter_capabilities": capabilities.as_dict() if capabilities else None,
         "capability_source": capability_source,
         "tool_calls": len(calls) if tool_trace == EVIDENCE_AVAILABLE else None,

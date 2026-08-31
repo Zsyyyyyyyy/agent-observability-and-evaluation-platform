@@ -165,7 +165,9 @@ def run_trial(spec: dict[str, Any], client: OpenAICompatibleClient | None = None
             result["status"] = "trace_incomplete"
             result["error"] = "trace validation failed"
         result["trace_summary"] = trace.summary()
-        result["evaluation"] = evaluate_baseline(result)
+        result["evaluation"] = evaluate_baseline(
+            result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),
+        )
         result["scores"] = result["evaluation"]["scores"]
         result["failure_attribution"] = attribute_trial(result)
         if result.get("run_store"):

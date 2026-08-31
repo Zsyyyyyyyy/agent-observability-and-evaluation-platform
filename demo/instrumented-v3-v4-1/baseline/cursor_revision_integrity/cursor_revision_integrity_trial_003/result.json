@@ -1,0 +1,392 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "The fix is complete. Here's a summary of the change made to `src/page.py` in `list_page`:\n\n1. **Revision guard**: A cursor is now rejected with `ValueError(\"cursor revision does not match\")` unless the cursor's embedded revision equals the `revision` argument — closing the bug where a cursor from another dataset revision was silently accepted.\n\n2. **Offset bounds check**: A decoded cursor offset that is negative or past the end of the record list (`offset < 0 or offset > len(records)`) is rejected with `ValueError(\"invalid cursor offset\")`, preventing out-of-range pagination.\n\n3. **No skip/repeat**: The existing contiguous slicing (`records[offset:offset + limit]` with `next_offset = offset + len(items)`) was preserved unchanged, so pages remain non-overlapping and gap-free.\n\nThe `src/cursor.py` encoding format and all existing success paths (first page, contiguous paging, final page with `next_cursor=None`) are untouched. The verification command was run; the tests visible in the output pass (the tool truncates the full transcript).",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 13,
+    "denied_tool_attempts": 1,
+    "duplicate_read_rate": 0.2,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.46153846153846156,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 5,
+        "denied": 1,
+        "error": 0,
+        "ok": 4
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 5,
+        "denied": 0,
+        "error": 0,
+        "ok": 5
+      }
+    },
+    "tool_calls": 13,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 0.9230769230769231,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 18
+  },
+  "changed_files": [
+    "src/page.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 4,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_cursor_from_another_revision_is_rejected (test_page.CursorRevisionTests.test_cursor_from_another_revision_is_rejected) ... ok\ntest_malformed_cursor_and_invalid_limit_are_rejected (test_page.CursorRevisionTests.test_malformed_cursor_and_invalid_limit_are_rejected) ... ok\ntest_negative_or_out_of_range_offset_is_rejected (test_page.CursorRevisionTests.test_negative_or_out_of_range_offset_is_rejected) ... ok\ntest_pages_are_contiguous_without_duplicates (test_page.CursorRevisionTests.test_pages_are_contiguous_without_duplicates) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/page.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 49,
+          "span_count": 24,
+          "trace_id": "trace_26313fafa7f7",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_26313fafa7f7"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 4,
+          "binary": false,
+          "deleted_lines": 2,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/page.py"
+          ],
+          "patch": "diff --git a/src/page.py b/src/page.py\nindex b9ec431..e6fa23f 100644\n--- a/src/page.py\n+++ b/src/page.py\n@@ -10,8 +10,10 @@ def list_page(records, revision, limit, cursor=None):\n     offset = 0\n     if cursor is not None:\n         cursor_revision, offset = decode_cursor(cursor)\n-        # BUG: cursors from a different dataset revision are accepted.\n-        del cursor_revision\n+        if cursor_revision != revision:\n+            raise ValueError(\"cursor revision does not match\")\n+        if offset < 0 or offset > len(records):\n+            raise ValueError(\"invalid cursor offset\")\n \n     items = records[offset:offset + limit]\n     next_offset = offset + len(items)\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [
+            "bash"
+          ],
+          "missing_end": [],
+          "tool_calls": 13,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 57148.549,
+          "tool_calls": 13,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 18
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/page.py b/src/page.py\nindex b9ec431..e6fa23f 100644\n--- a/src/page.py\n+++ b/src/page.py\n@@ -10,8 +10,10 @@ def list_page(records, revision, limit, cursor=None):\n     offset = 0\n     if cursor is not None:\n         cursor_revision, offset = decode_cursor(cursor)\n-        # BUG: cursors from a different dataset revision are accepted.\n-        del cursor_revision\n+        if cursor_revision != revision:\n+            raise ValueError(\"cursor revision does not match\")\n+        if offset < 0 or offset > len(records):\n+            raise ValueError(\"invalid cursor offset\")\n \n     items = records[offset:offset + limit]\n     next_offset = offset + len(items)\n",
+  "git_evidence": {
+    "base_revision": "47e4dbb15cfa175964e2e2d0c2009b0a58df3102",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/page.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 6254,
+    "prompt_tokens": 52986,
+    "total_tokens": 59240
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 27,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 4,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_cursor_from_another_revision_is_rejected (test_page.CursorRevisionTests.test_cursor_from_another_revision_is_rejected) ... ok\ntest_malformed_cursor_and_invalid_limit_are_rejected (test_page.CursorRevisionTests.test_malformed_cursor_and_invalid_limit_are_rejected) ... ok\ntest_negative_or_out_of_range_offset_is_rejected (test_page.CursorRevisionTests.test_negative_or_out_of_range_offset_is_rejected) ... ok\ntest_pages_are_contiguous_without_duplicates (test_page.CursorRevisionTests.test_pages_are_contiguous_without_duplicates) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/page.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 49,
+        "span_count": 24,
+        "trace_id": "trace_26313fafa7f7",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_26313fafa7f7"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 4,
+        "binary": false,
+        "deleted_lines": 2,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/page.py"
+        ],
+        "patch": "diff --git a/src/page.py b/src/page.py\nindex b9ec431..e6fa23f 100644\n--- a/src/page.py\n+++ b/src/page.py\n@@ -10,8 +10,10 @@ def list_page(records, revision, limit, cursor=None):\n     offset = 0\n     if cursor is not None:\n         cursor_revision, offset = decode_cursor(cursor)\n-        # BUG: cursors from a different dataset revision are accepted.\n-        del cursor_revision\n+        if cursor_revision != revision:\n+            raise ValueError(\"cursor revision does not match\")\n+        if offset < 0 or offset > len(records):\n+            raise ValueError(\"invalid cursor offset\")\n \n     items = records[offset:offset + limit]\n     next_offset = offset + len(items)\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [
+          "bash"
+        ],
+        "missing_end": [],
+        "tool_calls": 13,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 57148.549,
+        "tool_calls": 13,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 18
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 342.28558401810005,
+  "test_exit_code": 0,
+  "test_stderr": "test_cursor_from_another_revision_is_rejected (test_page.CursorRevisionTests.test_cursor_from_another_revision_is_rejected) ... ok\ntest_malformed_cursor_and_invalid_limit_are_rejected (test_page.CursorRevisionTests.test_malformed_cursor_and_invalid_limit_are_rejected) ... ok\ntest_negative_or_out_of_range_offset_is_rejected (test_page.CursorRevisionTests.test_negative_or_out_of_range_offset_is_rejected) ... ok\ntest_pages_are_contiguous_without_duplicates (test_page.CursorRevisionTests.test_pages_are_contiguous_without_duplicates) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_26313fafa7f7",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 49,
+    "span_count": 24,
+    "trace_id": "trace_26313fafa7f7",
+    "valid": true
+  },
+  "trial_id": "cursor_revision_integrity_trial_003"
+}

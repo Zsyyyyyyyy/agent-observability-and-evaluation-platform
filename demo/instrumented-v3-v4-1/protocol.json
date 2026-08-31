@@ -1,0 +1,193 @@
+{
+  "agents": [
+    {
+      "adapter": "external-command",
+      "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+      "label": "baseline",
+      "prompt_profile": "targeted-context-verify-v3",
+      "prompt_profile_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+      "rendered_prompt_set_hash": "sha256:988ded1df9d2a4257cc32551bb94499efb6190dbf6f3a9787372fe1440c739e7",
+      "version": "external-openai-v3"
+    },
+    {
+      "adapter": "external-command",
+      "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+      "label": "candidate",
+      "prompt_profile": "bounded-success-stop-verify-v4-1",
+      "prompt_profile_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+      "rendered_prompt_set_hash": "sha256:5f4660f5f02b819ddd035305002b724234325403ffddd8e7b100dc3e51548fa0",
+      "version": "external-openai-v4.1"
+    }
+  ],
+  "allowed_differences": [
+    "agents[].prompt_profile"
+  ],
+  "benchmark": {
+    "cases": [
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 18,
+          "timeout_seconds": 180
+        },
+        "case_id": "batch_partial_failure_isolation",
+        "fixture_tree_hash": "sha256:1008858984cf34621973421d32fa1a052f4c3de5c6479c0e82fefe67ab5bce9a",
+        "manifest_hash": "sha256:966b31fad0c44ff3a01ffa2e0d78987ef1801c7ac12aa2f6654d4ba09afb996d",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 16,
+          "timeout_seconds": 180
+        },
+        "case_id": "cache_expiry_boundary",
+        "fixture_tree_hash": "sha256:7e6f958095cf318b11da09d47bd5012a8aee54cef6dabc50aaaa89b296107538",
+        "manifest_hash": "sha256:e586293fce82e37e4c6a6f9d072af7daa28011c84181fa9fa04c4d7ac8f24c8c",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 18,
+          "timeout_seconds": 180
+        },
+        "case_id": "config_inheritance_precedence",
+        "fixture_tree_hash": "sha256:6f7f6164ce51bb7f977a25e5d4fdaccbdacf330cf3a3ebf19055adb01e9f16de",
+        "manifest_hash": "sha256:f60f9001b49f1eb8b425e650920c2551e0d96dc364dd808ed99384d12249f03b",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 18,
+          "timeout_seconds": 180
+        },
+        "case_id": "cursor_revision_integrity",
+        "fixture_tree_hash": "sha256:2e4125acbc70eb44d320e3691f4142aebb17e19821aec3cdd3a20336e1b070c3",
+        "manifest_hash": "sha256:d3c18cc2ff03fe89439e0a8b0c59731bdb5606738241fc2adb18fe9ac46cfc52",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 18,
+          "timeout_seconds": 180
+        },
+        "case_id": "dependency_cycle_detection",
+        "fixture_tree_hash": "sha256:5da801e7b0f8a740a3a62d8d221ced8e82a543a274ba788035a2d5f5739f37e1",
+        "manifest_hash": "sha256:c3e627f833d3195a873546441da22bddf1750d354076c9a9a3413c026bee79d6",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 20,
+          "timeout_seconds": 180
+        },
+        "case_id": "inventory_reservation_atomicity",
+        "fixture_tree_hash": "sha256:112637958e427c66cb9c126550fc2f0774577e584581e3e9879a9f1219105edc",
+        "manifest_hash": "sha256:85cd2faec72a0e47e980526f38b1aa90e3484a4f674b1faeca38726e15a10898",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 12,
+          "timeout_seconds": 180
+        },
+        "case_id": "parse_port_blank_default",
+        "fixture_tree_hash": "sha256:1f7b54dc54c78c63b7d7cc55a98544da583552244d38a6f5bad5c42c30da15fa",
+        "manifest_hash": "sha256:6785dc3ba08b6cda202293914b71dbf744778c212b1c59a67bd4889615613959",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 16,
+          "timeout_seconds": 180
+        },
+        "case_id": "permission_deny_precedence",
+        "fixture_tree_hash": "sha256:f71e35d541fe4c3d6e2ee782510248d07025a9efa239721a598782ec5e6023e6",
+        "manifest_hash": "sha256:2869d7990fadb90e1a1c63b72e25845ab79071a4f527e54d4f52fd34b9df8755",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 18,
+          "timeout_seconds": 180
+        },
+        "case_id": "profile_v1_migration",
+        "fixture_tree_hash": "sha256:0ce640460ee9e47afa75aafefb324fe73f38e56273c335841bcf7f1f9dd03670",
+        "manifest_hash": "sha256:a497482cc62b50e4fc8284d43a762fa907cd51dd2281144c699a2ebe01612984",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 12,
+          "timeout_seconds": 180
+        },
+        "case_id": "safe_slug_punctuation",
+        "fixture_tree_hash": "sha256:44418de306231a244dae8ef148670a1b9411908f12e489f609a30bfe585c27bd",
+        "manifest_hash": "sha256:a5e7e59bdb981073edceffccda17ec2fbead9b0bfebc346eb29e5bf1190a781a",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      },
+      {
+        "budget": {
+          "max_tokens": "[redacted]",
+          "max_tool_calls": 18,
+          "timeout_seconds": 180
+        },
+        "case_id": "webhook_signature_canonicalization",
+        "fixture_tree_hash": "sha256:7a765d2e70545f8d4936306fce1233c32399ca4e470d68d2b921efba265fd971",
+        "manifest_hash": "sha256:cc5bb364c6d8795269eec27308781b1565d074bd2d2d29b12d02a097c5f1054b",
+        "policy_hash": "sha256:ace628421366d83e5e0d0220078006c59ced213dc03631f12db127e74212656d",
+        "test_command_hash": "sha256:ff9589960e74f51a5cc9c4734f3d88062b11f378e66f0311d66ca513f800d2c3"
+      }
+    ]
+  },
+  "comparison_intent": "prompt_profile_only",
+  "execution": {
+    "schedule_seed": 20260820,
+    "trials_per_case": 3
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "provider": "openai-compatible",
+    "seed": "not_configured",
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "platform": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "python": "3.11.15",
+    "system": "Darwin"
+  },
+  "platform_source_hashes": {
+    "evaluators.py": "sha256:d8a4ac83c6fe1c49fc8bf91e1208050e0fd023c88a8fbf9935fb39ed9d40932e",
+    "external_openai_agent.py": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+    "schema.py": "sha256:d385cdc9c03adac05a036609e0357b4f21cc9b2354106bc88b55bd09b813a040"
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "sandbox": {
+    "bash": false,
+    "docker": true,
+    "image": "python:3.11-slim"
+  },
+  "schema_version": 2,
+  "trace_schema_version": 1
+}

@@ -19,6 +19,8 @@ make console RUNTIME=.runtime/external-openai-v2-v3
 
 如果只打开旧服务或旧端口，页面可能仍显示旧实验；如果服务代码没有包含 `/api/evolution`，页面会标记 `PARTIAL API`，但仍会保留已有 Dashboard、Trial 和 Experiment 数据。
 
+每个 Console 只有一个 Evaluation Context：Project、Agent、Experiment、Baseline 和 Candidate 都由当前 Runtime 的 `experiment.json` 决定。Timeline 与 Experiment Ledger 只读取匹配该 Context 的 Catalog 谱系；它们不会再独立切换到其他项目后继续展示当前 Runtime 的 Trial。Runtime 的 Context 与 `experiment.json` 不一致时，Console 会显示 **Evaluation Context mismatch**，并隐藏 Case、Trial、Latency、Gate 与 Trace Evidence。旧 Artifact 缺少身份信息时会标记为 Legacy Runtime / Unknown scope。
+
 ## Read-only API
 
 | Endpoint | Purpose |
@@ -28,9 +30,10 @@ make console RUNTIME=.runtime/external-openai-v2-v3
 | `/api/trials/<console-id>` | full Result plus parsed Trace events |
 | `/api/experiments/latest` | Baseline/Candidate comparison report, if present |
 | `/api/gate/latest` | current promotion Gate report, if present |
+| `/api/context` | the single Evaluation Context resolved from the selected Runtime |
 | `/api/evolution` | Agent-lineage versions, Experiment ledger, comparability labels, and Gate decisions from the local Evolution Catalog |
 
-The `<console-id>` is the Trial directory relative to the selected runtime root. Path traversal is rejected by the repository layer.
+`/api/dashboard`、`/api/trials`、`/api/trials/<console-id>`、`/api/experiments/latest` 与 `/api/gate/latest` 都返回 `{ available, data, context }`。当 `available` 为 `false` 时，`reason` 为 `runtime_context_mismatch`，且不会返回 Runtime Evidence。The `<console-id>` is the Trial directory relative to the selected runtime root. Path traversal is rejected by the repository layer.
 
 ## Information architecture
 

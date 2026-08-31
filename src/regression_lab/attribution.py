@@ -36,6 +36,8 @@ def _primary_attribution(result: dict[str, Any]) -> dict[str, str]:
         return {"kind": "model", "reason": "model_provider_or_response_failure"}
     if status in {"infra_failed", "timed_out"}:
         return {"kind": "infrastructure", "reason": "runner_sandbox_or_deadline_failure"}
+    if status == "environment_mismatch":
+        return {"kind": "evidence", "reason": "runtime_environment_does_not_match_protocol"}
     if status == "trace_incomplete" or scores.get("trace_completeness", {}).get("passed") is False:
         return {"kind": "evidence", "reason": "trace_or_evidence_validation_failed"}
     for evaluator in ("path_policy", "diff", "tool_integrity"):

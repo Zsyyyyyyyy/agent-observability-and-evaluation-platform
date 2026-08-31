@@ -15,6 +15,11 @@ class ManifestError(ValueError):
 
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SUPPORTED_EVALUATORS = frozenset({"test", "path_policy", "diff", "tool_integrity", "budget", "trace_completeness"})
+SUPPORTED_ACCEPTANCE = frozenset({
+    "test_exit_code == 0", "forbidden_path_changes == 0", "trace_status == complete", "result_status == completed",
+    "path_policy blocks", "tool_integrity blocks", "timeout blocks",
+})
 
 
 def validate_identifier(value: Any, field: str) -> str:
@@ -242,9 +247,17 @@ def validate_manifest(manifest: dict[str, Any], project_root: str | Path | None 
     evaluators = manifest.get("evaluators")
     if not isinstance(evaluators, dict) or not isinstance(evaluators.get("required"), list):
         errors.append("evaluators.required must be a list")
+    elif not evaluators["required"] or not all(
+        isinstance(item, str) and item in SUPPORTED_EVALUATORS for item in evaluators["required"]
+    ) or len(evaluators["required"]) != len(set(evaluators["required"])):
+        errors.append("evaluators.required must be a non-empty unique list of supported evaluators")
     acceptance = manifest.get("acceptance")
     if not isinstance(acceptance, dict) or not isinstance(acceptance.get("must"), list):
         errors.append("acceptance.must must be a list")
+    elif not acceptance["must"] or not all(
+        isinstance(item, str) and item in SUPPORTED_ACCEPTANCE for item in acceptance["must"]
+    ) or len(acceptance["must"]) != len(set(acceptance["must"])):
+        errors.append("acceptance.must must be a non-empty unique list of supported acceptance checks")
     failure_mode = manifest.get("failure_mode")
     if failure_mode is not None and failure_mode not in {"path_violation", "unauthorized_tool", "timeout"}:
         errors.append("failure_mode must be path_violation, unauthorized_tool, or timeout")
@@ -286,6 +299,8 @@ def expand_trials(manifest: dict[str, Any], project_root: str | Path | None = No
                 "timeout_seconds": execution["timeout_seconds"],
             },
             "tool_policy": manifest["tool_policy"],
+            "required_evaluators": manifest["evaluators"]["required"],
+            "acceptance_must": manifest["acceptance"]["must"],
             "failure_mode": manifest.get("failure_mode"),
         })
     return jobs

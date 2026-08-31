@@ -14,6 +14,7 @@ import os
 import platform
 import random
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,6 +22,7 @@ from typing import Any, Iterable
 from regression_lab.artifacts import write_json_atomically
 
 
+# 字段为可选扩展，保留 v2 版本号以便既有 Artifact 和离线验证保持兼容。
 PROTOCOL_SCHEMA_VERSION = 2
 DEFAULT_SCHEDULE_SEED = 20260813
 _SENSITIVE_KEY = re.compile(r"(?:api[_.-]?key|authorization|secret|token|password)", re.IGNORECASE)
@@ -53,6 +55,115 @@ def tree_hash(path: str | Path) -> str:
         digest.update(item.read_bytes())
         digest.update(b"\0")
     return "sha256:" + digest.hexdigest()
+
+
+def _module_entrypoint(interpreter: str, module: str, source_root: Path | None = None) -> Path | None:
+    """定位 ``python -m`` 的本地模块文件，而不执行 Agent 本身。"""
+
+    lookup = (
+        "import importlib.util, sys; "
+        "spec = importlib.util.find_spec(sys.argv[1]); "
+        "print(spec.origin if spec and spec.origin else '')"
+    )
+    try:
+        environment = os.environ.copy()
+        if source_root is not None:
+            environment["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source_root), environment.get("PYTHONPATH", "")]))
+        result = subprocess.run(
+            [interpreter, "-c", lookup, module], env=environment,
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    location = result.stdout.strip()
+    candidate = Path(location)
+    return candidate.resolve() if location and candidate.is_file() else None
+
+
+def agent_source_snapshot(command: Iterable[str], source_root: str | Path | None = None) -> dict[str, object]:
+    """Identify the executable Agent source without persisting its local path."""
+
+    root_hint = Path(source_root).resolve() if source_root else None
+    arguments = [argument.replace("{agent_source}", str(root_hint)) if root_hint is not None else argument for argument in command]
+    if len(arguments) >= 3 and arguments[1] == "-m":
+        entrypoint = _module_entrypoint(arguments[0], arguments[2], root_hint)
+    else:
+        entrypoint = next((Path(value).resolve() for value in reversed(arguments) if Path(value).is_file()), None)
+    if entrypoint is None:
+        return {"agent_source_hash": None, "entrypoint_hash": None, "source_scope": "unavailable", "source_revision": None, "source_dirty": None}
+    entrypoint_hash = file_hash(entrypoint)
+    try:
+        source_directory = root_hint if root_hint is not None else entrypoint.parent
+        root_result = subprocess.run(
+            ["git", "-C", str(source_directory), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
+        root = Path(root_result.stdout.strip())
+        files_result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
+        files = sorted({line for line in files_result.stdout.splitlines() if line})
+        digest = hashlib.sha256()
+        for relative in files:
+            source = root / relative
+            if not source.is_file():
+                continue
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(source.stat().st_mode & 0o777).encode("ascii"))
+            digest.update(b"\0")
+            digest.update(source.read_bytes())
+            digest.update(b"\0")
+        revision = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True, timeout=3,
+        ).stdout.strip()
+        dirty = bool(subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1"],
+            capture_output=True, text=True, check=True, timeout=3,
+        ).stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return {
+            "agent_source_hash": entrypoint_hash,
+            "entrypoint_hash": entrypoint_hash,
+            "source_scope": "entrypoint_only",
+            "source_revision": None,
+            "source_dirty": None,
+        }
+    return {
+        "agent_source_hash": "sha256:" + digest.hexdigest(),
+        "entrypoint_hash": entrypoint_hash,
+        "source_scope": "git_worktree",
+        "source_revision": revision,
+        "source_dirty": dirty,
+    }
+
+
+def runtime_environment_identity(interpreter: str | None = None) -> dict[str, object]:
+    """返回可比较但不泄漏本机路径或依赖清单的运行环境身份。"""
+
+    executable = interpreter or sys.executable
+    probe = (
+        "import hashlib,json,platform,sys; from importlib import metadata; "
+        "packages=sorted(f'{d.metadata[\"Name\"] or d.name}=={d.version}' "
+        "for d in metadata.distributions()); "
+        "print(json.dumps({'python':platform.python_version(),'implementation':platform.python_implementation(),"
+        "'system':platform.system(),'machine':platform.machine(),"
+        "'dependency_hash':'sha256:'+hashlib.sha256('\\n'.join(packages).encode()).hexdigest(),"
+        "'dependency_count':len(packages)}))"
+    )
+    try:
+        completed = subprocess.run(
+            [executable, "-I", "-c", probe], capture_output=True, text=True, check=True, timeout=8,
+        )
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return {"available": False, "identity_hash": None}
+    if not isinstance(identity, dict):
+        return {"available": False, "identity_hash": None}
+    payload = {key: identity.get(key) for key in ("python", "implementation", "system", "machine", "dependency_hash", "dependency_count")}
+    return {"available": True, **payload, "identity_hash": sha256_text(canonical_json(payload))}
 
 
 def _redact(value: Any) -> Any:
@@ -96,13 +207,15 @@ def _manifest_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def _source_hashes(adapter: str, external_command: list[str] | None) -> dict[str, str]:
-    root = Path(__file__).resolve().parents[2]
-    sources = [root / "src" / "regression_lab" / "evaluators.py", root / "src" / "regression_lab" / "schema.py"]
+    package_root = Path(__file__).resolve().parent
+    sources = [package_root / "evaluators.py", package_root / "schema.py"]
+    hashes = {source.name: file_hash(source) for source in sources if source.is_file()}
+    hashes["regression_lab_tree"] = tree_hash(package_root)
     if adapter == "external-command" and external_command:
-        candidate = Path(external_command[-1])
-        if candidate.is_file():
-            sources.append(candidate)
-    return {source.name: file_hash(source) for source in sources if source.is_file()}
+        identity = agent_source_snapshot(external_command)
+        if isinstance(identity["agent_source_hash"], str):
+            hashes["external_agent"] = identity["agent_source_hash"]
+    return hashes
 
 
 def _optional_float(name: str, default: float, *, maximum: float) -> float:
@@ -147,25 +260,29 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
 
     snapshots = [_manifest_snapshot(manifest) for manifest in manifests]
     source_hashes = _source_hashes(adapter, external_command)
-    profile_source_hash = source_hashes.get(Path(external_command[-1]).name) if external_command else None
+    profile_source_hash = agent_source_snapshot(external_command)["agent_source_hash"] if external_command else None
     prompt_profiles = prompt_profiles or {}
     agent_snapshots = agent_snapshots or {}
     protocol_agents = []
     for item in agents:
         descriptor = prompt_profiles.get(item["version"], {})
         snapshot = agent_snapshots.get(item["id"])
+        source_hash = snapshot.get("agent_source_hash") if isinstance(snapshot, dict) else None
         entrypoint_hash = snapshot.get("entrypoint_hash") if isinstance(snapshot, dict) else None
+        command = snapshot.get("normalized_command") if isinstance(snapshot, dict) else None
+        interpreter = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
         protocol_agents.append({
             "label": item["id"], "version": item["version"], "adapter": adapter,
-            "agent_source_hash": entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
+            "agent_source_hash": source_hash if isinstance(source_hash, str) else entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
             "prompt_profile": descriptor.get("profile_id", item["version"]),
-            "prompt_profile_source_hash": entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
+            "prompt_profile_source_hash": source_hash if isinstance(source_hash, str) else entrypoint_hash if isinstance(entrypoint_hash, str) else profile_source_hash,
             # The Agent protocol-description handshake hashes the final system
             # prompts rendered for every Case, without persisting their text.
             "rendered_prompt_set_hash": descriptor.get("rendered_prompt_set_hash", "unavailable"),
             # AgentSpec is the A/B identity evidence.  The command bridge is
             # only an execution detail and must not become that identity.
             **({"agent_spec_snapshot": snapshot} if isinstance(snapshot, dict) else {}),
+            "runtime_environment": runtime_environment_identity(interpreter) if interpreter else None,
         })
     protocol: dict[str, Any] = {
         "schema_version": PROTOCOL_SCHEMA_VERSION,
@@ -218,6 +335,7 @@ def build_execution_plan(jobs: Iterable[dict[str, Any]], agents: list[dict[str, 
         raise ValueError("execution plan requires at least two agents")
     pairs = sorted((str(job["case_id"]), int(job["trial_index"]), str(job["job_id"])) for job in jobs)
     generator = random.Random(seed)
+    # 先冻结 Case/Trial 顺序，再为每一对版本随机先后，避免运行先后成为性能差异的隐含变量。
     generator.shuffle(pairs)
     entries: list[dict[str, Any]] = []
     for case_id, trial_index, job_id in pairs:

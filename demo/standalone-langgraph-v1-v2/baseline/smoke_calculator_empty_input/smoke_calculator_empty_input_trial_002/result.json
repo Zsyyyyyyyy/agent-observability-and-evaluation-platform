@@ -1,0 +1,447 @@
+{
+  "adapter_capabilities": {
+    "context_trace": false,
+    "hierarchical_trace": false,
+    "mcp_trace": false,
+    "model_usage": false,
+    "schema_version": 2,
+    "test_trace": false,
+    "tool_semantics": false,
+    "tool_trace": false,
+    "trace": true,
+    "workflow_trace": false
+  },
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "process_completed",
+  "agent_output": {
+    "availability": "unavailable",
+    "reason": "blackbox mode does not require an Agent output file",
+    "source": "not_provided"
+  },
+  "agent_profile": null,
+  "agent_response": "",
+  "agent_source_hash": "sha256:0e62221e38604d7254838688176474f658645f7e7067a6fde884705bd8a07b1f",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "<local-path> LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n  from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n",
+  "agent_stdout": "Fixed calculator to handle empty input by returning 0 instead of raising an exception; existing non-empty input behavior remains unchanged. Verified with unittest: 2 tests passed (exit code 0).\n",
+  "agent_version": "v1",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "adapter_capabilities": {
+      "context_trace": false,
+      "hierarchical_trace": false,
+      "mcp_trace": false,
+      "model_usage": false,
+      "schema_version": 2,
+      "test_trace": false,
+      "tool_semantics": false,
+      "tool_trace": false,
+      "trace": true,
+      "workflow_trace": false
+    },
+    "availability": {
+      "duplicate_reads": false,
+      "edit_before_read": false,
+      "repeated_tool_calls": false,
+      "test_retries": false,
+      "tool_outcomes": false
+    },
+    "capability_source": "artifact_snapshot",
+    "closed_tool_calls": null,
+    "denied_tool_attempts": null,
+    "duplicate_read_rate": null,
+    "duplicate_reads": null,
+    "edit_before_read_count": null,
+    "evidence_availability": {
+      "duplicate_reads": "unsupported",
+      "edit_before_read": "unsupported",
+      "repeated_tool_calls": "unsupported",
+      "test_retries": "unsupported",
+      "tool_outcomes": "unsupported",
+      "tool_trace": "unsupported",
+      "trace": "available"
+    },
+    "failed_tool_calls": null,
+    "repeated_tool_call_rate": null,
+    "repeated_tool_calls": null,
+    "test_retry_count": null,
+    "tool_breakdown": null,
+    "tool_calls": null,
+    "tool_error_rate": null,
+    "tool_retries": null,
+    "tool_success_rate": null,
+    "unavailable": {
+      "duplicate_reads": "Adapter does not support tool_semantics evidence",
+      "edit_before_read_count": "Adapter does not support tool_semantics evidence",
+      "repeated_tool_calls": "Adapter does not support tool_semantics evidence",
+      "test_retry_count": "Adapter does not support test_trace evidence",
+      "tool_calls": "Adapter does not support tool_trace evidence",
+      "tool_success_rate": "Adapter does not support tool_trace evidence"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 24
+  },
+  "changed_files": [
+    "src/calculator.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "acceptance": {
+      "checks": {
+        "forbidden_path_changes == 0": true,
+        "result_status == completed": true,
+        "test_exit_code == 0": true,
+        "trace_status == complete": true
+      },
+      "expected_block": false,
+      "must": [
+        "test_exit_code == 0",
+        "forbidden_path_changes == 0",
+        "trace_status == complete",
+        "result_status == completed"
+      ],
+      "passed": true
+    },
+    "passed": true,
+    "required_evaluators": [
+      "test",
+      "path_policy",
+      "diff",
+      "tool_integrity",
+      "budget",
+      "trace_completeness"
+    ],
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 2,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_empty_input_returns_zero (test_calculator.CalculatorTests.test_empty_input_returns_zero) ... ok\ntest_number_keeps_existing_behavior (test_calculator.CalculatorTests.test_number_keeps_existing_behavior) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/calculator.py"
+          ],
+          "forbidden_path_changes": 0,
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**",
+            "pyproject.toml",
+            ".github/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 2,
+          "span_count": 1,
+          "trace_id": "trace_783fd627967b",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_783fd627967b"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 2,
+          "binary": false,
+          "deleted_lines": 0,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/calculator.py"
+          ],
+          "patch": "diff --git a/src/calculator.py b/src/calculator.py\nindex b210cbc..2ebd774 100644\n--- a/src/calculator.py\n+++ b/src/calculator.py\n@@ -1,3 +1,5 @@\n def calculate(value):\n+    if value == \"\":\n+        return 0\n     return int(value) + 1\n \n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [],
+          "missing_end": [],
+          "tool_calls": 0,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 56382.248,
+          "tool_calls": 0,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 24
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:0e62221e38604d7254838688176474f658645f7e7067a6fde884705bd8a07b1f",
+  "failure_attribution": {
+    "evidence": {},
+    "failure_span": null,
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**",
+    "pyproject.toml",
+    ".github/**"
+  ],
+  "git_diff": "diff --git a/src/calculator.py b/src/calculator.py\nindex b210cbc..2ebd774 100644\n--- a/src/calculator.py\n+++ b/src/calculator.py\n@@ -1,3 +1,5 @@\n def calculate(value):\n+    if value == \"\":\n+        return 0\n     return int(value) + 1\n \n",
+  "git_evidence": {
+    "base_revision": "f387b9fe8d4f7155ab6071c3e2ce865cd350435d",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/calculator.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {},
+  "observation_mode": "blackbox",
+  "process_lifecycle": {
+    "return_code": 0,
+    "started": true,
+    "status": "process_completed"
+  },
+  "protocol_fingerprint": "sha256:007ae894c50941517f977c41a5a7f164b7dce5ae52815869aadf4a9b520239b5",
+  "run_store": null,
+  "schedule_index": 4,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 2,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_empty_input_returns_zero (test_calculator.CalculatorTests.test_empty_input_returns_zero) ... ok\ntest_number_keeps_existing_behavior (test_calculator.CalculatorTests.test_number_keeps_existing_behavior) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/calculator.py"
+        ],
+        "forbidden_path_changes": 0,
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**",
+          "pyproject.toml",
+          ".github/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 2,
+        "span_count": 1,
+        "trace_id": "trace_783fd627967b",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_783fd627967b"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 2,
+        "binary": false,
+        "deleted_lines": 0,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/calculator.py"
+        ],
+        "patch": "diff --git a/src/calculator.py b/src/calculator.py\nindex b210cbc..2ebd774 100644\n--- a/src/calculator.py\n+++ b/src/calculator.py\n@@ -1,3 +1,5 @@\n def calculate(value):\n+    if value == \"\":\n+        return 0\n     return int(value) + 1\n \n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [],
+        "missing_end": [],
+        "tool_calls": 0,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 56382.248,
+        "tool_calls": 0,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 24
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 25.765,
+  "test_exit_code": 0,
+  "test_stderr": "test_empty_input_returns_zero (test_calculator.CalculatorTests.test_empty_input_returns_zero) ... ok\ntest_number_keeps_existing_behavior (test_calculator.CalculatorTests.test_number_keeps_existing_behavior) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_783fd627967b",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 2,
+    "span_count": 1,
+    "trace_id": "trace_783fd627967b",
+    "valid": true
+  },
+  "trial_id": "smoke_calculator_empty_input_trial_002"
+}

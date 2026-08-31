@@ -1,4 +1,5 @@
 import unittest
+import math
 
 from regression_lab.gate import evaluate_gate
 from scripts.evaluate_gate import select_comparison_arm
@@ -33,6 +34,28 @@ METRICS = {
     "path_policy_violation_rate": 0.0, "diff_policy_violation_rate": 0.0,
     "avg_tool_calls": 5.0, "avg_model_tokens": 1000.0,
 }
+
+
+def observed_job(model_tokens=None, tool_calls=None, model_origin="not_observed", tool_origin="not_observed"):
+    return {
+        "model_tokens": model_tokens,
+        "tool_calls": tool_calls,
+        "evidence_provenance": {
+            "process_lifecycle": "platform_observed",
+            "test_result": "platform_observed",
+            "git_evidence": "platform_observed",
+            "model_usage": model_origin,
+            "tool_trace": tool_origin,
+        },
+    }
+
+
+def with_summary_jobs(document, *jobs):
+    document["summaries"] = {
+        "baseline": {"jobs": list(jobs)},
+        "candidate": {"jobs": list(jobs)},
+    }
+    return document
 
 
 class GateTests(unittest.TestCase):
@@ -163,6 +186,19 @@ class GateTests(unittest.TestCase):
         self.assertEqual(report["decision"]["status"], "hold")
         self.assertIn("candidate_infra_failed_rate_limit", report["decision"]["hard_blocking_failures"])
 
+    def test_gate_rejects_non_finite_or_impossible_persisted_metrics(self):
+        with self.assertRaisesRegex(ValueError, "finite rate between 0 and 1"):
+            evaluate_gate(experiment(METRICS, {**METRICS, "completion_rate": math.nan}), {})
+        with self.assertRaisesRegex(ValueError, "finite non-negative number"):
+            evaluate_gate(experiment(METRICS, {**METRICS, "avg_model_tokens": -1.0}), {})
+
+    def test_absolute_candidate_failure_is_classified_as_reliability_regression(self):
+        candidate = {**METRICS, "infra_failed_rate": 0.1}
+
+        report = evaluate_gate(experiment(candidate, candidate), {})
+
+        self.assertTrue(report["decision"]["correctness_or_reliability_regressed"])
+
     def test_gate_is_inconclusive_for_missing_metric_instead_of_defaulting_to_zero(self):
         candidate = dict(METRICS)
         candidate.pop("avg_model_tokens")
@@ -182,3 +218,85 @@ class GateTests(unittest.TestCase):
         report = evaluate_gate(incomplete_trial, {})
         self.assertEqual(report["decision"]["status"], "inconclusive")
         self.assertIn("paired_trial_coverage", report["decision"]["hard_blocking_failures"])
+
+    def test_gate_requires_platform_origin_for_core_trial_evidence(self):
+        document = experiment(METRICS, METRICS)
+        document["summaries"] = {
+            "baseline": {"jobs": [{"evidence_provenance": {"process_lifecycle": "platform_observed", "test_result": "platform_observed", "git_evidence": "platform_observed"}}]},
+            "candidate": {"jobs": [{"evidence_provenance": {"process_lifecycle": "sdk_self_reported", "test_result": "platform_observed", "git_evidence": "platform_observed"}}]},
+        }
+        report = evaluate_gate(document, {})
+        self.assertEqual(report["decision"]["status"], "inconclusive")
+        self.assertIn("core_evidence_provenance", report["decision"]["hard_blocking_failures"])
+
+    def test_tool_only_framework_evidence_does_not_require_model_provenance(self):
+        report = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS),
+            observed_job(tool_calls=2, tool_origin="framework_observed"),
+        ), {})
+        rules = {rule["name"]: rule for rule in report["rules"]}
+
+        self.assertTrue(rules["tool_trace_evidence_provenance"]["passed"])
+        self.assertNotIn("model_usage_evidence_provenance", rules)
+
+    def test_model_and_tool_provenance_are_checked_independently(self):
+        tool_untrusted = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS),
+            observed_job(model_tokens=10, tool_calls=2, model_origin="framework_observed", tool_origin="sdk_self_reported"),
+        ), {})
+        model_untrusted = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS),
+            observed_job(model_tokens=10, tool_calls=2, model_origin="sdk_self_reported", tool_origin="framework_observed"),
+        ), {})
+
+        tool_rules = {rule["name"]: rule for rule in tool_untrusted["rules"]}
+        model_rules = {rule["name"]: rule for rule in model_untrusted["rules"]}
+        self.assertTrue(tool_rules["model_usage_evidence_provenance"]["passed"])
+        self.assertFalse(tool_rules["tool_trace_evidence_provenance"]["passed"])
+        self.assertFalse(model_rules["model_usage_evidence_provenance"]["passed"])
+        self.assertTrue(model_rules["tool_trace_evidence_provenance"]["passed"])
+        self.assertEqual(tool_untrusted["decision"]["status"], "inconclusive")
+        self.assertEqual(model_untrusted["decision"]["status"], "inconclusive")
+
+    def test_framework_cost_evidence_passes_and_partial_evidence_is_inconclusive(self):
+        trusted = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS),
+            observed_job(model_tokens=10, tool_calls=2, model_origin="framework_observed", tool_origin="framework_observed"),
+        ), {})
+        partial = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS),
+            observed_job(model_tokens=10, tool_calls=2, model_origin="framework_observed", tool_origin="framework_observed"),
+            observed_job(model_tokens=None, tool_calls=None),
+        ), {})
+        trusted_rules = {rule["name"]: rule for rule in trusted["rules"]}
+        partial_rules = {rule["name"]: rule for rule in partial["rules"]}
+
+        self.assertTrue(trusted_rules["model_usage_evidence_provenance"]["passed"])
+        self.assertTrue(trusted_rules["tool_trace_evidence_provenance"]["passed"])
+        self.assertFalse(partial_rules["model_usage_evidence_provenance"]["passed"])
+        self.assertFalse(partial_rules["tool_trace_evidence_provenance"]["passed"])
+        self.assertEqual(partial["decision"]["status"], "inconclusive")
+
+    def test_unobserved_or_historical_cost_evidence_keeps_existing_behavior(self):
+        unobserved = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS), observed_job(),
+        ), {})
+        historical = experiment(METRICS, METRICS)
+        historical["summaries"] = {"baseline": {"jobs": [{}]}, "candidate": {"jobs": [{}]}}
+        historical_report = evaluate_gate(historical, {})
+        unobserved_rules = {rule["name"] for rule in unobserved["rules"]}
+        historical_rules = {rule["name"] for rule in historical_report["rules"]}
+
+        self.assertNotIn("model_usage_evidence_provenance", unobserved_rules)
+        self.assertNotIn("tool_trace_evidence_provenance", unobserved_rules)
+        self.assertNotIn("core_evidence_provenance", historical_rules)
+
+    def test_policy_can_explicitly_accept_native_sdk_cost_evidence(self):
+        report = evaluate_gate(with_summary_jobs(
+            experiment(METRICS, METRICS),
+            observed_job(model_tokens=10, tool_calls=2, model_origin="sdk_self_reported", tool_origin="sdk_self_reported"),
+        ), {"accepted_cost_evidence_origins": ["platform_observed", "framework_observed", "sdk_self_reported"]})
+
+        rules = {rule["name"]: rule for rule in report["rules"]}
+        self.assertTrue(rules["model_usage_evidence_provenance"]["passed"])
+        self.assertTrue(rules["tool_trace_evidence_provenance"]["passed"])

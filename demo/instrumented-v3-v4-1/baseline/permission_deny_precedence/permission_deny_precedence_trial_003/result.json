@@ -1,0 +1,388 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "All tests pass. The fix in `src/policy.py` makes `deny` take precedence over `allow` and requires a tool to match an `allow` pattern to be permitted:\n\n```python\nif matches(policy.get(\"deny\", []), tool_name):\n    return False\nreturn matches(policy.get(\"allow\", []), tool_name)\n```",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 7,
+    "denied_tool_attempts": 0,
+    "duplicate_read_rate": 0.0,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.14285714285714285,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 3,
+        "denied": 0,
+        "error": 0,
+        "ok": 3
+      }
+    },
+    "tool_calls": 7,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 1.0,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 16
+  },
+  "changed_files": [
+    "src/policy.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 3,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_deny_wins_over_wildcard_allow (test_policy.PermissionPrecedenceTests.test_deny_wins_over_wildcard_allow) ... ok\ntest_explicitly_allowed_tool_is_permitted (test_policy.PermissionPrecedenceTests.test_explicitly_allowed_tool_is_permitted) ... ok\ntest_tool_without_matching_allow_is_denied (test_policy.PermissionPrecedenceTests.test_tool_without_matching_allow_is_denied) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/policy.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 27,
+          "span_count": 13,
+          "trace_id": "trace_67e75af02b71",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_67e75af02b71"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 3,
+          "binary": false,
+          "deleted_lines": 4,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/policy.py"
+          ],
+          "patch": "diff --git a/src/policy.py b/src/policy.py\nindex 4d9d803..ae806a2 100644\n--- a/src/policy.py\n+++ b/src/policy.py\n@@ -4,7 +4,6 @@ from src.matcher import matches\n def is_allowed(tool_name, policy):\n     \"\"\"Apply a glob-based tool policy with deny taking precedence.\"\"\"\n \n-    # BUG: a broad allow pattern can accidentally bypass an explicit deny.\n-    if matches(policy.get(\"allow\", []), tool_name):\n-        return True\n-    return False\n+    if matches(policy.get(\"deny\", []), tool_name):\n+        return False\n+    return matches(policy.get(\"allow\", []), tool_name)\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [],
+          "missing_end": [],
+          "tool_calls": 7,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 6256.272,
+          "tool_calls": 7,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 16
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/policy.py b/src/policy.py\nindex 4d9d803..ae806a2 100644\n--- a/src/policy.py\n+++ b/src/policy.py\n@@ -4,7 +4,6 @@ from src.matcher import matches\n def is_allowed(tool_name, policy):\n     \"\"\"Apply a glob-based tool policy with deny taking precedence.\"\"\"\n \n-    # BUG: a broad allow pattern can accidentally bypass an explicit deny.\n-    if matches(policy.get(\"allow\", []), tool_name):\n-        return True\n-    return False\n+    if matches(policy.get(\"deny\", []), tool_name):\n+        return False\n+    return matches(policy.get(\"allow\", []), tool_name)\n",
+  "git_evidence": {
+    "base_revision": "c2986a2fcddc4096c41d33ce3db8c78cdacc9515",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/policy.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 491,
+    "prompt_tokens": 5971,
+    "total_tokens": 6462
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 35,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_deny_wins_over_wildcard_allow (test_policy.PermissionPrecedenceTests.test_deny_wins_over_wildcard_allow) ... ok\ntest_explicitly_allowed_tool_is_permitted (test_policy.PermissionPrecedenceTests.test_explicitly_allowed_tool_is_permitted) ... ok\ntest_tool_without_matching_allow_is_denied (test_policy.PermissionPrecedenceTests.test_tool_without_matching_allow_is_denied) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/policy.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 27,
+        "span_count": 13,
+        "trace_id": "trace_67e75af02b71",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_67e75af02b71"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 3,
+        "binary": false,
+        "deleted_lines": 4,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/policy.py"
+        ],
+        "patch": "diff --git a/src/policy.py b/src/policy.py\nindex 4d9d803..ae806a2 100644\n--- a/src/policy.py\n+++ b/src/policy.py\n@@ -4,7 +4,6 @@ from src.matcher import matches\n def is_allowed(tool_name, policy):\n     \"\"\"Apply a glob-based tool policy with deny taking precedence.\"\"\"\n \n-    # BUG: a broad allow pattern can accidentally bypass an explicit deny.\n-    if matches(policy.get(\"allow\", []), tool_name):\n-        return True\n-    return False\n+    if matches(policy.get(\"deny\", []), tool_name):\n+        return False\n+    return matches(policy.get(\"allow\", []), tool_name)\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [],
+        "missing_end": [],
+        "tool_calls": 7,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 6256.272,
+        "tool_calls": 7,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 16
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 265.2652919641696,
+  "test_exit_code": 0,
+  "test_stderr": "test_deny_wins_over_wildcard_allow (test_policy.PermissionPrecedenceTests.test_deny_wins_over_wildcard_allow) ... ok\ntest_explicitly_allowed_tool_is_permitted (test_policy.PermissionPrecedenceTests.test_explicitly_allowed_tool_is_permitted) ... ok\ntest_tool_without_matching_allow_is_denied (test_policy.PermissionPrecedenceTests.test_tool_without_matching_allow_is_denied) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_67e75af02b71",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 27,
+    "span_count": 13,
+    "trace_id": "trace_67e75af02b71",
+    "valid": true
+  },
+  "trial_id": "permission_deny_precedence_trial_003"
+}

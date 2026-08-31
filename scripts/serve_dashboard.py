@@ -9,14 +9,12 @@ import sys
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from regression_lab.dashboard import DashboardRepository
-
-
-REGRESSION = Path(__file__).resolve().parents[1]
+from regression_lab.paths import asset_path, runtime_root
 
 
 def handler_for(repository: DashboardRepository, static_root: Path):
@@ -35,17 +33,35 @@ def handler_for(repository: DashboardRepository, static_root: Path):
             super().end_headers()
 
         def do_GET(self) -> None:
-            path = urlparse(self.path).path
-            if path == "/api/dashboard": return self._json(repository.dashboard())
-            if path == "/api/trials": return self._json(repository.trials())
-            if path == "/api/experiments/latest": return self._json(repository.latest_experiment() or {})
-            if path == "/api/gate/latest": return self._json(repository.latest_gate() or {})
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == "/api/dashboard": return self._json(repository.runtime_response(repository.dashboard))
+            if path == "/api/trials": return self._json(repository.runtime_response(repository.trials))
+            if path == "/api/experiments/latest": return self._json(repository.runtime_response(lambda: repository.latest_experiment() or {}))
+            if path == "/api/gate/latest": return self._json(repository.runtime_response(lambda: repository.latest_gate() or {}))
             if path == "/api/protocol": return self._json(repository.protocol())
+            if path == "/api/context": return self._json(repository.validate_runtime_context())
             if path == "/api/evolution": return self._json(repository.evolution())
             if path == "/api/policy-stop": return self._json(repository.policy_stop_evidence())
+            if path == "/api/trace-diff":
+                query = parse_qs(parsed.query)
+                baseline = query.get("baseline", [""])[0]
+                candidate = query.get("candidate", [""])[0]
+                diff = repository.trace_diff(baseline, candidate)
+                if diff is None:
+                    return self._json({"error": "trace trial not found"}, HTTPStatus.NOT_FOUND)
+                return self._json(repository.runtime_response(lambda: diff))
             if path.startswith("/api/trials/"):
+                validation = repository.validate_runtime_context()
+                if not validation["available"]:
+                    return self._json({
+                        "available": False, "reason": validation["reason"], "data": {}, "context": validation["context"],
+                        **({"runtime": validation["runtime"]} if "runtime" in validation else {}),
+                    })
                 detail = repository.trial(unquote(path.removeprefix("/api/trials/")))
-                return self._json(detail or {"error": "trial not found"}, HTTPStatus.OK if detail else HTTPStatus.NOT_FOUND)
+                if detail is None:
+                    return self._json({"error": "trial not found"}, HTTPStatus.NOT_FOUND)
+                return self._json(repository.runtime_response(lambda: detail))
             if path == "/": self.path = "/index.html"
             return super().do_GET()
 
@@ -56,11 +72,11 @@ def handler_for(repository: DashboardRepository, static_root: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runtime", default=str(REGRESSION / ".runtime" / "core-experiment-v1"))
+    parser.add_argument("--runtime", default=str(runtime_root() / "core-experiment-v1"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.host, args.port), handler_for(DashboardRepository(args.runtime), REGRESSION / "web"))
+    server = ThreadingHTTPServer((args.host, args.port), handler_for(DashboardRepository(args.runtime), asset_path("web")))
     print(f"Observability Console: http://{args.host}:{args.port}")
     try: server.serve_forever()
     except KeyboardInterrupt: pass

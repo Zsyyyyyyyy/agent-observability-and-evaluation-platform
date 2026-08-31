@@ -28,9 +28,8 @@ def terminate_process_group(process: subprocess.Popen[str], *, grace_seconds: fl
     local process can be targeted.
     """
 
-    if process.poll() is not None:
-        return
     try:
+        # 父进程可能已退出而子进程仍持有 stdout/stderr；此时仍必须按原 PGID 清理。
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
@@ -54,6 +53,7 @@ def run_with_deadline(
 ) -> ProcessResult:
     """Run a worker in its own process group and terminate the whole group on timeout."""
 
+    # communicate 同时消费两条管道，避免 Agent 大量输出时父进程与子进程相互等待。
     process = subprocess.Popen(
         list(argv),
         cwd=cwd,

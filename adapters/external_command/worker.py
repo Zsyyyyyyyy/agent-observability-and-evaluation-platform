@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shlex
@@ -15,21 +14,67 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+from regression_lab.paths import asset_root
+
+# 保留给现有 Worker 调试与测试使用；运行时资源不再依赖它推导 Python 包路径。
+ROOT = asset_root()
+
+# 外部 Agent 默认只继承运行和模型访问所需的显式变量，避免平台进程中的其他密钥
+# 随 os.environ 全量泄漏。需要特殊环境的 Agent 应由自己的入口加载专用配置。
+INHERITED_AGENT_ENV = frozenset({
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "AGENT_API_KEY",
+    "AGENT_MODEL",
+    "AGENT_BASE_URL",
+    "AGENT_PROVIDER",
+    "AGENT_TEMPERATURE",
+    "AGENT_TOP_P",
+    "AGENT_SEED",
+    "AGENT_REQUEST_TIMEOUT_SECONDS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+})
 
 from regression_lab.evaluators import evaluate_baseline
 from regression_lab.behavior import summarize_trial_behavior
 from regression_lab.attribution import attribute_trial
 from regression_lab.runner import terminate_process_group
 from regression_lab.sandbox import DockerSandbox, SandboxConfig, SandboxUnavailable
-from regression_lab.schema import validate_trace
+from regression_lab.schema import trace_conformance, validate_trace
 from regression_lab.store import RunStore
 from regression_lab.artifacts import write_json_atomically
+from regression_lab.protocol import agent_source_snapshot, runtime_environment_identity
 from regression_lab.trace import TraceCollector
+from regression_lab.paths import python_import_root
 
 
-def _git(worktree: Path, *args: str) -> str:
+def _external_environment(agent_source_root: str | None = None) -> dict[str, str]:
+    """构造传给外部 Agent 和宿主机测试命令的最小环境。"""
+
+    environment = {
+        name: os.environ[name]
+        for name in INHERITED_AGENT_ENV
+        if name in os.environ
+    }
+    # Observer 位于平台受控路径，但不应抹掉用户 Agent 已声明的模块搜索路径。
+    # 外部命令本身已由用户明确选择，保留该路径不扩大平台的执行权限。
+    python_paths = [agent_source_root, str(python_import_root())]
+    inherited_paths = os.environ.get("PYTHONPATH")
+    if inherited_paths:
+        python_paths.extend(path for path in inherited_paths.split(os.pathsep) if path)
+    environment.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": os.pathsep.join(dict.fromkeys(path for path in python_paths if path))})
+    return environment
+
+
+def _run_git(worktree: Path, *args: str) -> str:
     completed = subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, text=True, check=False)
     if completed.returncode:
         raise RuntimeError((completed.stdout + completed.stderr).strip())
@@ -37,11 +82,16 @@ def _git(worktree: Path, *args: str) -> str:
 
 
 def _record_git_evidence(result: dict[str, Any], worktree: Path) -> None:
-    _git(worktree, "add", "-N", "--", ".")
-    status = _git(worktree, "status", "--porcelain")
+    _run_git(worktree, "add", "-N", "--", ".")
+    status = _run_git(worktree, "status", "--porcelain")
     result["changed_files"] = [line[3:] for line in status.splitlines() if line.strip()]
-    result["git_diff"] = _git(worktree, "diff", "HEAD", "--no-ext-diff", "--binary")
-    result["git_evidence"] = {"base_revision": _git(worktree, "rev-parse", "HEAD").strip(), "status_porcelain": status, "diff_base": "HEAD", "captures_untracked": True}
+    result["git_diff"] = _run_git(worktree, "diff", "HEAD", "--no-ext-diff", "--binary")
+    result["git_evidence"] = {
+        "base_revision": _run_git(worktree, "rev-parse", "HEAD").strip(),
+        "status_porcelain": status,
+        "diff_base": "HEAD",
+        "captures_untracked": True,
+    }
 
 
 def _run_test(worktree: Path, command: str, sandbox: DockerSandbox | None, timeout: int,
@@ -49,10 +99,10 @@ def _run_test(worktree: Path, command: str, sandbox: DockerSandbox | None, timeo
     started = time.monotonic()
     try:
         if sandbox:
-            value = sandbox.run(command, timeout_seconds=timeout)
-            return {"exit_code": value.exit_code, "duration_ms": value.duration_ms, "stdout": value.stdout, "stderr": value.stderr, "sandbox_status": value.status}
-        process = subprocess.run(shlex.split(command), cwd=worktree, env=environment, text=True, capture_output=True, timeout=timeout)
-        return {"exit_code": process.returncode, "duration_ms": round((time.monotonic() - started) * 1000, 3), "stdout": process.stdout, "stderr": process.stderr}
+            sandbox_result = sandbox.run(command, timeout_seconds=timeout)
+            return {"exit_code": sandbox_result.exit_code, "duration_ms": sandbox_result.duration_ms, "stdout": sandbox_result.stdout, "stderr": sandbox_result.stderr, "sandbox_status": sandbox_result.status}
+        completed = subprocess.run(shlex.split(command), cwd=worktree, env=environment, text=True, capture_output=True, timeout=timeout)
+        return {"exit_code": completed.returncode, "duration_ms": round((time.monotonic() - started) * 1000, 3), "stdout": completed.stdout, "stderr": completed.stderr}
     except SandboxUnavailable as exc:
         return {"exit_code": -2, "duration_ms": 0, "stdout": "", "stderr": f"sandbox unavailable: {exc}", "sandbox_status": "unavailable"}
     except subprocess.TimeoutExpired:
@@ -87,11 +137,10 @@ MODEL_FAILURE_KINDS = frozenset({
 })
 
 
-def _command_source_hash(command: list[str]) -> str | None:
-    """Measure the trusted local entry point before it is executed."""
+def _command_source_hash(command: list[str], source_root: str | None = None) -> str | None:
+    """Measure the trusted Agent worktree before it is executed."""
 
-    candidate = next((Path(argument) for argument in reversed(command) if Path(argument).is_file()), None)
-    return "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate else None
+    return agent_source_snapshot(command, source_root)["agent_source_hash"]
 
 
 def _read_output(path: Path) -> tuple[str, str, str | None]:
@@ -112,10 +161,13 @@ def _read_output(path: Path) -> tuple[str, str, str | None]:
     return response, reason, failure_kind
 
 
-def _resolve_command(command: list[str], *, worktree: Path, task: str) -> list[str]:
-    """Resolve only the two AgentSpec v1 placeholders without involving a shell."""
+def _resolve_command(command: list[str], *, worktree: Path, task: str, source_root: str | None = None) -> list[str]:
+    """解析平台拥有的模板字段，不通过 shell 拼接外部命令。"""
 
-    return [item.replace("{workspace}", str(worktree)).replace("{task}", task) for item in command]
+    return [
+        item.replace("{workspace}", str(worktree)).replace("{task}", task).replace("{agent_source}", source_root or "{agent_source}")
+        for item in command
+    ]
 
 
 def _model_usage(trace_path: Path) -> dict[str, int]:
@@ -140,6 +192,24 @@ def _model_usage(trace_path: Path) -> dict[str, int]:
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 totals[key] = totals.get(key, 0) + value
     return totals
+
+
+def _trace_events(trace_path: Path) -> list[dict[str, Any]]:
+    """统一读取 Trace；合规性和聚合必须基于同一份原始证据。"""
+
+    try:
+        lines = trace_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    events = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
 def _root_profile(trace_path: Path) -> str | None:
@@ -177,12 +247,40 @@ def _trace_model_failure_kind(trace_path: Path) -> str | None:
     return None
 
 
+def _evidence_provenance(observation_mode: str) -> dict[str, str]:
+    """标明证据由谁采集，避免把 Agent 自报数据表述为平台独立观测。"""
+
+    trace_origin = {
+        "blackbox": "platform_observed",
+        "langgraph": "framework_observed",
+        "sdk": "sdk_self_reported",
+    }.get(observation_mode, "not_observed")
+    return {
+        "process_lifecycle": "platform_observed",
+        "test_result": "platform_observed",
+        "git_evidence": "platform_observed",
+        "runtime_environment": "platform_observed",
+        "trace": trace_origin,
+        "model_usage": trace_origin if observation_mode != "blackbox" else "not_observed",
+        "tool_trace": trace_origin if observation_mode != "blackbox" else "not_observed",
+    }
+
+
+def _observation_status(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
     trial_id, worktree = str(spec["trial_id"]), Path(spec["worktree"]).resolve()
     command = spec.get("external_command")
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
     trace_path, result_path = Path(spec["trace_output"]), Path(spec["result_output"])
     agent_output = result_path.with_name("agent-output.json")
+    observation_status = result_path.with_name("observation-status.json")
     observation_mode = spec.get("observation_mode", "sdk")
     result: dict[str, Any] = {
         "trial_id": trial_id, "adapter_id": "external-command", "adapter_version": (spec.get("adapter") or {}).get("default_version", "external-agent-v1"),
@@ -201,13 +299,14 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         # external Agent process. It may differ from the generic Adapter default.
         "adapter_capabilities": spec.get("adapter_capabilities"),
         "observation_mode": observation_mode,
+        "evidence_provenance": _evidence_provenance(str(observation_mode)),
     }
     lifecycle_trace: TraceCollector | None = None
     lifecycle_span_id: str | None = None
     lifecycle_started = time.monotonic()
     try:
-        if observation_mode not in {"sdk", "blackbox"}:
-            raise ValueError("observation_mode must be sdk or blackbox")
+        if observation_mode not in {"sdk", "blackbox", "langgraph"}:
+            raise ValueError("observation_mode must be sdk, blackbox, or langgraph")
         if observation_mode == "blackbox":
             lifecycle_trace = TraceCollector(trace_path, trace_id)
             lifecycle_span_id = lifecycle_trace.start_span(
@@ -220,17 +319,20 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"worktree does not exist: {worktree}")
         if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
             raise ValueError("external_command must be a non-empty argv string array")
-        result["agent_source_hash"] = _command_source_hash(command)
+        source_root = spec.get("agent_source_root") if isinstance(spec.get("agent_source_root"), str) else None
+        result["agent_source_hash"] = _command_source_hash(command, source_root)
         expected_hash = result.get("expected_agent_source_hash")
         result["agent_source_hash_matches_protocol"] = (
             isinstance(expected_hash, str) and result["agent_source_hash"] == expected_hash
         )
         sandbox_spec = spec.get("sandbox")
         sandbox = DockerSandbox(worktree, SandboxConfig(**{key: value for key, value in sandbox_spec.items() if key in SandboxConfig.__dataclass_fields__})) if sandbox_spec else None
-        environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT / "src"), os.environ.get("PYTHONPATH", "")])),
+        environment = {**_external_environment(source_root),
             "REGRESSION_TRIAL_ID": trial_id, "REGRESSION_TRACE_ID": trace_id, "REGRESSION_TRACE_PATH": str(trace_path),
             "REGRESSION_AGENT_OUTPUT_PATH": str(agent_output), "REGRESSION_WORKTREE": str(worktree), "REGRESSION_CASE_ID": str(spec.get("case_id", "")),
-            "REGRESSION_AGENT_VERSION": str(spec.get("agent_version", "")), "REGRESSION_ADAPTER_ID": "external-command"}
+            "REGRESSION_AGENT_VERSION": str(spec.get("agent_version", "")), "REGRESSION_ADAPTER_ID": "external-command",
+            "REGRESSION_OBSERVATION_STATUS_PATH": str(observation_status),
+        }
         environment["REGRESSION_PROMPT"] = str(spec.get("prompt", ""))
         environment["REGRESSION_TEST_COMMAND"] = str(spec.get("test_command", ""))
         environment["REGRESSION_ALLOWED_TOOLS"] = json.dumps(spec.get("allowed_tools", []))
@@ -241,7 +343,7 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         if spec.get("agent_profile"):
             environment["REGRESSION_AGENT_PROFILE"] = str(spec["agent_profile"])
         timeout = int(spec.get("trial_timeout_seconds", (spec.get("sandbox") or {}).get("timeout_seconds", 30)))
-        command = _resolve_command(command, worktree=worktree, task=str(spec.get("prompt", "")))
+        command = _resolve_command(command, worktree=worktree, task=str(spec.get("prompt", "")), source_root=source_root)
         try:
             returncode, stdout, stderr, timed_out = _run_external_command(
                 command, worktree=worktree, environment=environment, timeout=timeout
@@ -257,13 +359,13 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
             if returncode != 0:
                 result.update({"status": "agent_failed", "error": f"external command exited {returncode}", "agent_exit_reason": "process_error"})
                 result["process_lifecycle"] = {"started": True, "status": "process_error", "return_code": returncode}
-            elif observation_mode == "blackbox":
+            elif observation_mode in {"blackbox", "langgraph"}:
                 # Process completion is platform evidence, never an Agent response.
                 result.update({"agent_exit_reason": "process_completed"})
                 result["process_lifecycle"] = {"started": True, "status": "process_completed", "return_code": returncode}
                 result["agent_output"] = {
                     "availability": "unavailable", "source": "not_provided",
-                    "reason": "blackbox mode does not require an Agent output file",
+                    "reason": f"{observation_mode} mode does not require an Agent output file",
                 }
                 test = _run_test(worktree, str(spec["test_command"]), sandbox, timeout, environment)
                 result.update({"test_exit_code": test["exit_code"], "test_duration_ms": test["duration_ms"], "test_stdout": test["stdout"], "test_stderr": test["stderr"]})
@@ -304,6 +406,20 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             result["status"], result["error"] = "infra_failed", f"git evidence failed: {type(exc).__name__}: {exc}"
         result["trace_validation"] = validate_trace(trace_path, expected_trace_id=trace_id, expected_trial_id=trial_id, expected_root_attributes={"agent_version": str(spec.get("agent_version", "")), "adapter_id": "external-command"}).as_dict()
+        result["trace_conformance"] = trace_conformance(_trace_events(trace_path), observation_mode)
+        command = spec.get("external_command")
+        interpreter = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
+        environment = runtime_environment_identity(interpreter)
+        result["runtime_environment"] = environment
+        expected_environment = spec.get("expected_runtime_environment_hash")
+        result["runtime_environment_matches_protocol"] = expected_environment is None or (
+            isinstance(expected_environment, str) and environment.get("identity_hash") == expected_environment
+        )
+        if observation_mode == "langgraph" and result["status"] == "completed":
+            callback_status = _observation_status(observation_status)
+            result["framework_observation"] = callback_status or {"complete": False, "errors": ["status_missing"]}
+            if callback_status is None or callback_status.get("complete") is not True:
+                result.update({"status": "trace_incomplete", "error": "LangGraph observation did not complete"})
         if result["trace_validation"]["valid"]:
             result["model_usage"] = _model_usage(trace_path)
             result["agent_profile"] = _root_profile(trace_path) or result.get("agent_profile")
@@ -312,9 +428,14 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
                 if trace_kind:
                     result["model_failure"] = {"kind": trace_kind}
         result["behavior"] = summarize_trial_behavior(result)
-        if result["status"] == "completed" and not result["trace_validation"]["valid"]:
+        if result["status"] == "completed" and not result["runtime_environment_matches_protocol"]:
+            # 环境身份与 Trace 完整性是两类证据；混为 trace_incomplete 会误导故障归因。
+            result.update({"status": "environment_mismatch", "error": "runtime environment does not match frozen protocol"})
+        elif result["status"] == "completed" and (not result["trace_validation"]["valid"] or not result["trace_conformance"]["valid"]):
             result.update({"status": "trace_incomplete", "error": "trace validation failed"})
-        result["evaluation"] = evaluate_baseline(result)
+        result["evaluation"] = evaluate_baseline(
+            result, required=spec.get("required_evaluators"), acceptance=spec.get("acceptance_must"),
+        )
         result["scores"] = result["evaluation"]["scores"]
         result["failure_attribution"] = attribute_trial(result)
         if result.get("run_store"):
@@ -328,7 +449,9 @@ def run_trial(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("--input", required=True); args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    args = parser.parse_args()
     result = run_trial(json.loads(Path(args.input).read_text(encoding="utf-8")))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] == "completed" else 1

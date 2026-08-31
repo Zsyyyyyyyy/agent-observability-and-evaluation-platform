@@ -16,31 +16,63 @@ const METRICS = {
   model_tokens: { label: "Model tokens", unit: "tokens", lowerIsBetter: true, format: fmtTokens },
   tool_calls: { label: "Tool calls", unit: "calls", lowerIsBetter: true, format: fmtTools },
 };
-let state = { trials: [], experiment: {}, gate: {}, evolution: {}, protocol: {}, policyStop: {}, versions: [], selectedCase: null, metric: "duration_ms" };
+let state = { context: {}, runtimeAvailable: true, trials: [], dashboard: {}, experiment: {}, gate: {}, evolution: {}, protocol: {}, policyStop: {}, versions: [], selectedCase: null, metric: "duration_ms", traceView: "tree", traceEvents: [] };
 
-function versionLabels(experiment, trials) {
-  const agents = experiment?.agents || [];
-  const fromReport = agents.map(a => a.version).filter(Boolean);
-  return [...new Set([...fromReport, ...trials.map(t => t.agent_version).filter(Boolean)])].slice(0, 2);
-}
+function versionLabels(context) { return [context?.baseline_version, context?.candidate_version]; }
 function summarize(rows) { const good = rows.filter(r => r.passed && r.trace_valid); return { rows, pass: good.length, count: rows.length, duration: median(good.map(r => r.duration_ms)), tools: median(good.map(r => r.tool_calls)), tokens: median(good.map(r => r.model_tokens)), failures: rows.filter(r => !r.passed).map(r => r.status) }; }
 function deltaClass(n, lowerIsBetter = true) { return n === 0 ? "flat" : (lowerIsBetter ? n < 0 : n > 0) ? "positive" : "negative"; }
+function sameContext(left, right) { return ['project_id','agent_id','experiment_id','baseline_version','candidate_version'].every(field => (left?.[field] ?? null) === (right?.[field] ?? null)); }
+function runtimePayload(value, fallback) { return value?.available === true ? value.data ?? fallback : fallback; }
 
 async function load() {
   const responses = await Promise.allSettled([
     api('/api/dashboard'), api('/api/trials'), api('/api/experiments/latest'),
-    api('/api/gate/latest'), api('/api/evolution'), api('/api/protocol'), api('/api/policy-stop'),
+    api('/api/gate/latest'), api('/api/context'), api('/api/evolution'), api('/api/protocol'), api('/api/policy-stop'),
   ]);
   const value = (index, fallback) => responses[index]?.status === 'fulfilled' ? responses[index].value : fallback;
-  const dashboard = value(0, {trial_count: 0}), trials = value(1, []), experiment = value(2, {}), gate = value(3, {}), evolution = value(4, {}), protocol = value(5, {}), policyStop = value(6, {});
+  const dashboardResponse = value(0, {}), trialsResponse = value(1, {}), experimentResponse = value(2, {}), gateResponse = value(3, {}), contextResponse = value(4, {}), evolution = value(5, {}), protocol = value(6, {}), policyStop = value(7, {});
+  const context = contextResponse.context || {};
+  const runtimeResponses = [dashboardResponse, trialsResponse, experimentResponse, gateResponse];
+  const runtimeAvailable = contextResponse.available === true && runtimeResponses.every(response => response.available === true && sameContext(context, response.context));
+  const dashboard = runtimeAvailable ? runtimePayload(dashboardResponse, {trial_count: 0}) : {trial_count: 0};
+  const trials = runtimeAvailable ? runtimePayload(trialsResponse, []) : [];
+  const experiment = runtimeAvailable ? runtimePayload(experimentResponse, {}) : {};
+  const gate = runtimeAvailable ? runtimePayload(gateResponse, {}) : {};
   const failed = responses.filter(response => response.status === 'rejected');
   if (failed.length) document.querySelector('#connection').textContent = failed.length === responses.length ? '● API UNAVAILABLE' : '● PARTIAL API';
-  state = { ...state, trials, experiment, gate, evolution, protocol, policyStop, versions: versionLabels(experiment, trials) };
+  state = { ...state, context, runtimeAvailable, dashboard, trials, experiment, gate, evolution, protocol, policyStop, versions: versionLabels(context) };
+  renderConsoleContext(); renderRuntimeContextState(contextResponse, runtimeResponses);
+  if (!runtimeAvailable) { renderEvolution(); return; }
   renderMatrixHeaders();
   renderDecision(dashboard); renderEvidenceDeck(dashboard); renderBehaviorRegressionSummary(); renderDecisionSpine(); renderEvolution(); renderProtocol(); renderMatrix(); renderTriage();
   const firstCase = primaryCaseId() || caseIds()[0];
   if (state.selectedCase && caseIds().includes(state.selectedCase)) renderCaseDetail(state.selectedCase, false);
   else if (firstCase) renderCaseDetail(firstCase, false);
+}
+function renderConsoleContext() {
+  const context=state.context || {}, content=document.querySelector('#console-context');
+  const experiment=(state.evolution?.experiments || []).find(item=>item.experiment_id===state.evolution?.current_experiment_id);
+  const versions=[context.baseline_version,context.candidate_version].filter(Boolean).join(' → ');
+  const experimentName=experiment?.name || (versions ? `${versions} Regression` : context.experiment_id || 'unlinked');
+  const note=context.scope_status==='mismatch' ? 'Context mismatch: Runtime Evidence is hidden.' : context.legacy ? 'This artifact was created before Evaluation Context support. Project identity unavailable. Some evolution views may be limited.' : 'All Console evidence is scoped to this Experiment.';
+  const field=(label,value)=>`<div><span>${esc(label)}</span><strong>${esc(value || 'unavailable')}</strong></div>`;
+  content.innerHTML=`<header><span>EVALUATION CONTEXT</span><small>${esc(note)}</small></header><div class="console-context-fields">${field('PROJECT',context.project_id || 'Unknown Project')}${field('AGENT',context.agent_id || 'Unknown Agent')}${field('EXPERIMENT',experimentName)}${field('BASELINE',context.baseline_version)}${field('CANDIDATE',context.candidate_version)}</div>`;
+  content.classList.toggle('context-warning', context.legacy === true || context.scope_status === 'mismatch');
+}
+function renderRuntimeContextState(contextResponse, runtimeResponses) {
+  const valid = state.runtimeAvailable, error = document.querySelector('#runtime-context-error');
+  document.querySelectorAll('[data-runtime-evidence]').forEach(element => { element.hidden = !valid; });
+  if (valid) { error.hidden = true; return; }
+  const reason = contextResponse.reason || runtimeResponses.find(item => item?.reason)?.reason || 'runtime_context_mismatch';
+  const runtime = contextResponse.runtime || runtimeResponses.find(item => item?.runtime)?.runtime || {};
+  const runtimeVersions = [runtime.baseline_version, runtime.candidate_version].filter(Boolean).join(' → ') || 'unavailable';
+  const expectedVersions = [state.context.baseline_version, state.context.candidate_version].filter(Boolean).join(' → ') || 'unavailable';
+  error.hidden = false;
+  error.innerHTML = `<span>EVALUATION CONTEXT MISMATCH</span><strong>Runtime Evidence hidden</strong><div class="runtime-context-comparison"><div><span>RUNTIME</span><b>${esc(runtimeVersions)}</b></div><div><span>EXPECTED CATALOG</span><b>${esc(expectedVersions)}</b></div></div><small>${esc(reason.replaceAll('_',' '))}. Case, Trial, Latency, Gate, and Trace data are not shown until this Runtime matches its Experiment Context.</small>`;
+  state.selectedCase = null;
+  document.querySelector('#case-detail-panel').hidden = true;
+  document.querySelector('#detail').hidden = true;
+  document.querySelector('#detail-empty').hidden = false;
 }
 function renderMatrixHeaders() {
   const [baseline, candidate] = state.versions;
@@ -58,21 +90,35 @@ function renderProtocol() {
 function renderEvolution() {
   const content=document.querySelector('#evolution-content'), hint=document.querySelector('#evolution-hint');
   const evolution=state.evolution || {}, versions=[...(evolution.versions || [])];
+  const context=evolution.context || state.context || {}, legacy=context.legacy === true;
   const experiments=[...(evolution.experiments || [])].sort((a,b)=>String(a.completed_at || a.created_at).localeCompare(String(b.completed_at || b.created_at)));
   const experiment=experiments.find(item=>item.experiment_id===evolution.current_experiment_id) || experiments.at(-1);
+  const ledgerExperiments=[...(evolution.ledger_experiments || (experiment ? [experiment] : []))];
   const gate=(evolution.gate_decisions || []).find(item=>item.experiment_id===experiment?.experiment_id);
   if (!evolution.available || !versions.length) {
-    hint.textContent='catalog unavailable';
-    content.innerHTML='<p class="empty big">No version history is attached to this experiment yet. Run an Experiment to create a local Evolution Catalog.</p>';
+    hint.textContent=String(evolution.reason || 'catalog unavailable').replaceAll('_',' ');
+    const mismatch=evolution.reason==='runtime_catalog_context_mismatch';
+    const lineageMissing=['catalog_missing','catalog_experiment_missing','catalog_lineage_missing'].includes(evolution.reason);
+    content.innerHTML=mismatch
+      ? '<p class="empty big">Catalog scope does not match the current Evaluation Context. Version history is hidden.</p>'
+      : lineageMissing
+        ? '<div class="evolution-empty"><span>NO EVOLUTION LINEAGE ATTACHED</span><strong>This experiment has runtime evidence, but no matching catalog history.</strong><small>Run or index the Experiment with its Evaluation Context to attach lineage history.</small></div>'
+        : '<p class="empty big">No version history is attached to this Evaluation Context yet.</p>';
     return;
   }
-  hint.textContent=`${versions.length} versions · ${experiments.length} experiments · ${evolution.catalog_path || 'local catalog'}`;
+  hint.textContent=legacy
+    ? `LEGACY CATALOG · no project identity · ${evolution.catalog_path || 'local catalog'}`
+    : `${context.project_id || 'Unknown Project'} · ${versions.length} versions · ${experiments.length} experiments`;
+  const scope=`<div class="evolution-selectors"><span class="evolution-picker">PROJECT · ${esc(context.project_id || 'Unknown Project')}</span><span class="evolution-picker">AGENT · ${esc(context.agent_id || 'Unknown Agent')}</span><small>${legacy ? 'Legacy Catalog (no project identity)' : 'Current Evaluation Context only'}</small></div>`;
   const node=(version,index)=>{const isCandidate=version.version_id===experiment?.candidate_version_id; const isBaseline=version.version_id===experiment?.baseline_version_id; const role=isCandidate?'CANDIDATE':isBaseline?'BASELINE':'HISTORY'; const snapshot=version.snapshot || {}; return `<button type="button" class="evolution-node ${isCandidate?'candidate-node':''}" data-evolution-version="${esc(version.version_id)}" aria-expanded="${isCandidate?'true':'false'}"><span class="evolution-step">${String(index+1).padStart(2,'0')}</span><span class="evolution-marker"></span><span class="evolution-role">${role}</span><strong>${esc(version.version)}</strong><small>${esc(version.change_type)} · ${esc(version.status)}</small><span class="evolution-summary">${esc(version.change_summary)}</span><span class="evolution-meta">${esc(snapshot.adapter_id || 'adapter')} / ${esc(snapshot.prompt_profile || 'default profile')}</span></button>`;};
   const experimentGate=state.gate?.decision?.status || (state.gate?.passed === true ? 'promote' : state.gate?.passed === false ? 'hold' : 'unavailable');
-  const gateView=gate ? `<aside class="evolution-gate ${gate.status==='promote'?'promote':'hold'}"><span>LINEAGE GATE RECORD</span><strong>${esc(gate.status.toUpperCase())}</strong><small>${esc(gate.policy_version)} · ${esc(String(gate.rules?.length || 0))} rules</small></aside>` : `<aside class="evolution-gate pending"><span>LINEAGE GATE RECORD</span><strong>PENDING</strong><small>No catalog-linked Experiment Gate record. Experiment Gate: ${esc(experimentGate.toUpperCase())}.</small></aside>`;
+  const gateView=gate ? `<aside class="evolution-gate ${gate.status==='promote'?'promote':'hold'}"><span>LINEAGE GATE RECORD</span><strong>${esc(gate.status.toUpperCase())}</strong><small>${esc(gate.policy_version)} · ${esc(String(gate.rules?.length || 0))} rules</small></aside>` : `<aside class="evolution-gate pending"><span>LINEAGE GATE RECORD</span><strong>PENDING</strong><small>No catalog-linked Gate record. Experiment Gate: ${esc(experimentGate.toUpperCase())}.</small></aside>`;
   const metric=(value, kind)=>{const number=Number(value);if(!Number.isFinite(number))return 'N/A';if(kind==='pass')return `${number>0?'+':''}${(number*100).toFixed(1)}pp`;if(kind==='latency')return `${number>0?'+':''}${Math.round(number)}ms`;return `${number>0?'+':''}${Math.round(number)}`;};
   const comparability=(item)=>{const info=item.comparability || {}, level=info.level || 'none', label={first:'FIRST RECORD',strict:'STRICTLY COMPARABLE',partial:'PARTIALLY COMPARABLE',none:'NOT COMPARABLE'}[level] || 'NOT COMPARABLE', delta=item.comparison_summary?.delta || {}; return `<article class="experiment-ledger-row ${esc(level)} ${item.experiment_id===experiment?.experiment_id?'current':''}"><div class="experiment-ledger-title"><span>${esc(label)}</span><strong>${esc(item.name || 'version comparison')}</strong><small>${esc(info.reason || 'No comparability note.')}</small></div><div class="experiment-ledger-metrics"><span>PASS <b>${esc(metric(delta.evaluation_pass_rate,'pass'))}</b></span><span>LATENCY <b>${esc(metric(delta.avg_duration_ms,'latency'))}</b></span><span>TOKENS <b>${esc(metric(delta.avg_model_tokens,'count'))}</b></span><span>TOOLS <b>${esc(metric(delta.avg_tool_calls,'count'))}</b></span></div></article>`;};
-  content.innerHTML=`<div class="evolution-rail">${versions.map(node).join('')}</div><div class="evolution-context"><div><span>ACTIVE EXPERIMENT</span><strong>${esc(experiment?.name || 'current comparison')}</strong><small>${esc(String(experiment?.case_ids?.length || 0))} Cases · context ${esc(String(experiment?.evaluation_context_hash || '').slice(0,18))}…</small></div>${gateView}</div><section class="experiment-ledger" aria-label="Experiment comparison history"><div class="experiment-ledger-head"><span>EXPERIMENT LEDGER</span><small>Candidate minus baseline · comparable only when the benchmark basis supports a trend claim.</small></div>${experiments.map(comparability).join('')}</section>`;
+  const currentName=experiment?.name || context.experiment_id || 'current comparison';
+  const baselineVersion=context.baseline_version || experiment?.baseline_version_id || 'unavailable';
+  const candidateVersion=context.candidate_version || experiment?.candidate_version_id || 'unavailable';
+  content.innerHTML=`${scope}<div class="evolution-rail">${versions.map(node).join('')}</div><div class="evolution-context"><div><span>ACTIVE EXPERIMENT</span><strong>${esc(currentName)}</strong><small>${esc(String(experiment?.case_ids?.length || 0))} Cases · context ${esc(String(experiment?.evaluation_context_hash || '').slice(0,18))}…</small></div>${gateView}</div><section class="experiment-ledger" aria-label="Current Experiment ledger"><div class="experiment-ledger-head"><div><span>EXPERIMENT LEDGER</span><strong>CURRENT EXPERIMENT</strong></div><small>Candidate minus baseline · comparable only when the benchmark basis supports a trend claim.</small></div><div class="experiment-ledger-current"><div><span>EXPERIMENT</span><strong>${esc(currentName)}</strong></div><div><span>BASELINE</span><strong>${esc(baselineVersion)}</strong></div><div><span>CANDIDATE</span><strong>${esc(candidateVersion)}</strong></div></div>${ledgerExperiments.map(comparability).join('')}</section>`;
   document.querySelectorAll('[data-evolution-version]').forEach(button=>button.addEventListener('click',()=>toggleEvolutionNode(button)));
 }
 function toggleEvolutionNode(button) {
@@ -202,7 +248,8 @@ function renderBehaviorEvidence(behavior) {
     const availableBefore = baseline?.availability?.[availabilityKey] ?? before !== null;
     const availableAfter = candidate?.availability?.[availabilityKey] ?? after !== null;
     if (!baseline || !candidate) return `<div class="behavior-row"><span>${esc(label)}</span><b>${esc(behaviorValue(behavior?.[key], behavior?.availability?.[availabilityKey], formatter))}</b></div>`;
-    const delta = hasNumber(before) && hasNumber(after) ? Number(after)-Number(before) : null;
+    // 两侧没有同一类可用证据时，旧 Artifact 的遗留原始值不能构成可解释的 Delta。
+    const delta = availableBefore && availableAfter && hasNumber(before) && hasNumber(after) ? Number(after)-Number(before) : null;
     return `<div class="behavior-row"><span>${esc(label)}</span><div><b class="baseline-value">${esc(behaviorValue(before, availableBefore, formatter))}</b><i>→</i><b class="candidate-value">${esc(behaviorValue(after, availableAfter, formatter))}</b></div><em class="${delta === null ? 'flat' : deltaClass(delta, lowerIsBetter)}">${delta === null ? 'N/A' : signed((delta*100).toFixed(1),'pp')}</em></div>`;
   };
   const content = document.querySelector('#behavior-content');
@@ -212,7 +259,10 @@ function renderBehaviorEvidence(behavior) {
   }
   const count = baseline?.instrumented_trial_count ?? candidate?.instrumented_trial_count ?? behavior.instrumented_trial_count ?? 0;
   const availability = baseline?.availability || candidate?.availability || behavior.availability || {};
-  const note = behavior.unavailable?.all_behavior_metrics || baseline?.unavailable?.all_behavior_metrics || candidate?.unavailable?.all_behavior_metrics;
+  const unavailableMetrics = Object.entries(baseline?.evidence_availability || candidate?.evidence_availability || {})
+    .filter(([, state]) => state !== 'available').map(([field]) => field.replaceAll('_', ' '));
+  const note = behavior.unavailable?.all_behavior_metrics || baseline?.unavailable?.all_behavior_metrics || candidate?.unavailable?.all_behavior_metrics
+    || (unavailableMetrics.length ? `N/A: ${unavailableMetrics.join(', ')} evidence is unsupported or was not observed.` : null);
   content.innerHTML = `${baseline && candidate ? '<div class="evidence-key"><span class="baseline-key">baseline</span><span class="candidate-key">candidate</span></div>' : ''}${pair('Tool success rate','tool_success_rate','tool_outcomes',pct,false)}${pair('Repeated tool calls','repeated_tool_call_rate','repeated_tool_calls',pct,true)}${pair('Duplicate reads','duplicate_read_rate','duplicate_reads',pct,true)}${pair('Edit before read','edit_before_read_count','edit_before_read',v=>String(v),true)}<p class="evidence-note">${note ? esc(note) : `${esc(String(count))} instrumented Trial${count===1?'':'s'} · semantic fields are path/key/fingerprint only.`}</p>`;
 }
 function activeBehaviorDiff() { return state.experiment?.comparison?.behavior_diff || state.experiment?.behavior_diff || {}; }
@@ -253,11 +303,76 @@ function renderCaseDetail(caseId, shouldScroll = false) {
   const rows=state.trials.filter(t=>t.case_id===caseId), grouped=new Map();
   rows.forEach(row=>{const key=trialNumber(row);if(!grouped.has(key))grouped.set(key,{});grouped.get(key)[row.agent_version]=row;});
   const trialCard=(row, role)=>row ? `<button type="button" data-trial="${encodeURIComponent(row.id)}" class="paired-trial-card ${role} ${row.passed?'pass':'fail'}"><span>${esc(role.toUpperCase())}</span><strong>${row.passed?'PASS':esc(String(row.failure_reason || row.status || 'NEEDS REVIEW').replaceAll('_',' '))}</strong><small>${fmt(row.duration_ms)} · ${fmtTokens(row.model_tokens)} · ${fmtTools(row.tool_calls)}</small></button>` : `<div class="paired-trial-card missing"><span>${esc(role.toUpperCase())}</span><strong>MISSING</strong><small>No artifact for this side.</small></div>`;
-  const pairs=[...grouped.entries()].sort(([a],[b])=>Number(a)-Number(b)||a.localeCompare(b)).map(([index,pair])=>{const left=pair[base],right=pair[candidate],different=left?.passed!==right?.passed, behaviorPair=(activeBehaviorDiff().deltas || []).find(item=>item.case_id===caseId&&String(item.trial_index)===String(Number(index))); const patternItems=[...(behaviorPair?.removed_patterns || []).map(item=>`<span class="positive">✓ ${esc(item.pattern)} ${esc(String(item.delta))}</span>`),...(behaviorPair?.added_patterns || []).map(item=>`<span class="negative">! ${esc(item.pattern)} +${esc(String(item.delta))}</span>`)]; const behaviorNote=behaviorPair?`<div class="pair-behavior-delta"><b>BEHAVIOR Δ</b>${patternItems.length?patternItems.join(''):'<span class="flat">No semantic pattern change</span>'}</div>`:'';return `<section class="paired-trial-row ${different?'behavior-difference':''}"><div class="pair-index"><span>TRIAL</span><strong>${esc(String(index).padStart(3,'0'))}</strong>${different?'<small>OUTCOME DIFFERENCE</small>':''}</div>${trialCard(left,'baseline')}<div class="pair-arrow" aria-hidden="true">→</div>${trialCard(right,'candidate')}${behaviorNote}</section>`;}).join('');
+  const pairs=[...grouped.entries()].sort(([a],[b])=>Number(a)-Number(b)||a.localeCompare(b)).map(([index,pair])=>{const left=pair[base],right=pair[candidate],different=left?.passed!==right?.passed, behaviorPair=(activeBehaviorDiff().deltas || []).find(item=>item.case_id===caseId&&String(item.trial_index)===String(Number(index))); const patternItems=[...(behaviorPair?.removed_patterns || []).map(item=>`<span class="positive">✓ ${esc(item.pattern)} ${esc(String(item.delta))}</span>`),...(behaviorPair?.added_patterns || []).map(item=>`<span class="negative">! ${esc(item.pattern)} +${esc(String(item.delta))}</span>`)]; const behaviorNote=behaviorPair?`<div class="pair-behavior-delta"><b>BEHAVIOR Δ</b>${patternItems.length?patternItems.join(''):'<span class="flat">No semantic pattern change</span>'}</div>`:''; const traceButton=left&&right?`<button type="button" data-trace-diff="${encodeURIComponent(left.id)}|${encodeURIComponent(right.id)}">Compare traces</button>`:'';return `<section class="paired-trial-row ${different?'behavior-difference':''}"><div class="pair-index"><span>TRIAL</span><strong>${esc(String(index).padStart(3,'0'))}</strong>${different?'<small>OUTCOME DIFFERENCE</small>':''}${traceButton}</div>${trialCard(left,'baseline')}<div class="pair-arrow" aria-hidden="true">→</div>${trialCard(right,'candidate')}${behaviorNote}</section>`;}).join('');
   document.querySelector('#case-detail-content').innerHTML=pairs || '<p class="empty big">No paired Trial artifacts for this Case.</p>';
   document.querySelectorAll('[data-trial]').forEach(b=>b.addEventListener('click',()=>showTrial(decodeURIComponent(b.dataset.trial))));
+  document.querySelectorAll('[data-trace-diff]').forEach(button=>button.addEventListener('click',()=>{const [baseline,candidate]=button.dataset.traceDiff.split('|').map(decodeURIComponent); showTraceDiff(baseline,candidate);}));
   renderMatrix();
   if (shouldScroll) panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+async function showTraceDiff(baseline, candidate) {
+  const panel=document.querySelector('#trace-diff-panel');
+  const summary=document.querySelector('#trace-diff-summary');
+  const rowsContainer=document.querySelector('#trace-diff-rows');
+  // 配对 Trial 可直接进入比较，不能要求用户先打开任意一侧 Artifact 才看得到结果。
+  document.querySelector('#detail-empty').hidden=true;
+  document.querySelector('#detail').hidden=false;
+  try {
+    const response=await api(`/api/trace-diff?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`);
+    if(response.available!==true) throw new Error('Trace Diff unavailable');
+    const diff=response.data||{}, first=diff.first_divergence, critical=diff.critical_path||{}, failure=diff.failure_alignment||{};
+    const describe=span=>span ? `${span.span_type||'span'} · ${span.name||'unknown'} · ${fmt(span.duration_ms)} · ${fmtTokens(span.tokens)} · ${fmtTools(span.tool_calls)}` : '—';
+    const delta=row=>row.delta ? `Δ ${fmt(row.delta.duration_ms)} · ${fmtTokens(row.delta.tokens)} · ${fmtTools(row.delta.tool_calls)}` : row.kind.toUpperCase();
+    const diffRows=diff.rows||[], childrenByParent=new Map(), parentByRow=new Map(), collapsedRows=new Set();
+    diffRows.forEach(row=>{
+      const parent=row.parent_row_id||'root', children=childrenByParent.get(parent)||[];
+      children.push(row.row_id); childrenByParent.set(parent,children); parentByRow.set(row.row_id,row.parent_row_id||null);
+    });
+    const node=(span,row,side)=>{
+      if(!span)return `<div class="trace-side ${side} missing" aria-label="No aligned span">—</div>`;
+      const expandable=childrenByParent.has(row.row_id);
+      const toggle=expandable
+        ? `<button type="button" class="trace-node-toggle" data-trace-diff-toggle="${esc(row.row_id)}" aria-expanded="true" aria-label="Toggle child spans">⌄</button>`
+        : '<span class="trace-node-stem" aria-hidden="true"></span>';
+      return `<div class="trace-side ${side}"><div class="trace-node" style="--trace-depth:${Number(row.depth)||0}">${toggle}<span class="trace-node-label">${esc(describe(span))}</span></div></div>`;
+    };
+    const rows=diffRows.map(row=>[
+      `<div class="trace-diff-row ${esc(row.kind)} ${esc(row.divergence||'')} ${first?.row_id===row.row_id?'first-divergence':''}" data-row-id="${esc(row.row_id)}" data-parent-row-id="${esc(row.parent_row_id||'')}">`,
+      node(row.baseline,row,'baseline'), `<div class="trace-delta"><b>${esc(delta(row))}</b></div>`, node(row.candidate,row,'candidate'), '</div>',
+    ].join('')).join('');
+    panel.hidden=false;
+    const firstSummary=first
+      ? `<button type="button" class="trace-diff-first" data-first-divergence="${esc(first.row_id)}"><b>FIRST BEHAVIOR DIVERGENCE</b><span>${esc((first.path||[]).join(' → '))}</span><span>Baseline: ${esc(first.baseline?.status||'—')} · Candidate: ${esc(first.candidate?.status||'—')} · ${esc(first.reason||first.kind)}</span></button>`
+      : '<span>No structural or outcome divergence · efficiency metrics may still differ</span>';
+    summary.innerHTML=`${firstSummary}<span>${diff.matched_span_count||0} aligned · critical path ${fmt(critical.baseline?.duration_ms)} → ${fmt(critical.candidate?.duration_ms)} · failure spans ${failure.aligned?'aligned':'not aligned'}</span>`;
+    rowsContainer.innerHTML=rows || '<p class="empty">No Trace spans available for alignment.</p>';
+    const refreshVisibility=()=>{
+      document.querySelectorAll('#trace-diff-rows .trace-diff-row').forEach(element=>{
+        let parent=parentByRow.get(element.dataset.rowId), hidden=false;
+        while(parent){ if(collapsedRows.has(parent)){ hidden=true; break; } parent=parentByRow.get(parent); }
+        element.hidden=hidden;
+      });
+      document.querySelectorAll('[data-trace-diff-toggle]').forEach(toggle=>{
+        toggle.setAttribute('aria-expanded',String(!collapsedRows.has(toggle.dataset.traceDiffToggle)));
+      });
+    };
+    document.querySelectorAll('[data-trace-diff-toggle]').forEach(toggle=>toggle.addEventListener('click',()=>{
+      const rowId=toggle.dataset.traceDiffToggle;
+      collapsedRows.has(rowId)?collapsedRows.delete(rowId):collapsedRows.add(rowId);
+      refreshVisibility();
+    }));
+    summary.querySelector('[data-first-divergence]')?.addEventListener('click',event=>{
+      const rowId=event.currentTarget.dataset.firstDivergence;
+      for(let parent=parentByRow.get(rowId);parent;parent=parentByRow.get(parent)) collapsedRows.delete(parent);
+      refreshVisibility();
+      document.querySelector(`#trace-diff-rows [data-row-id="${rowId}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});
+    });
+    panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+  } catch {
+    panel.hidden=false;
+    summary.textContent='Trace Diff unavailable';
+    rowsContainer.innerHTML='<p class="empty">Trace Diff unavailable</p>';
+  }
 }
 function renderCaseDiagnosis(caseId) {
   const report=caseComparisons().find(item=>item.case_id===caseId), pairs=report?.paired_trials || [];
@@ -330,6 +445,47 @@ function traceRows(events) {
     return `<li class="trace-event ${isTool?'tool-event':''}"><span class="trace-kind">${esc(kind)}</span><span class="trace-body"><strong class="trace-name">${esc(label)}</strong>${meta.length?`<span class="trace-meta">${esc(meta.join(' · '))}</span>`:''}${preview?`<span class="trace-preview">${esc(String(preview).replace(/\s+/g,' ').slice(0,180))}</span>`:''}</span></li>`;
   });
 }
+function traceTreeRows(events) {
+  const visible = events.filter(e => !(e.kind === 'span_end' && e.span_id && events.some(start => start.kind === 'span_start' && start.span_id === e.span_id)));
+  const starts = new Set(events.filter(e => e.kind === 'span_start' && e.span_id).map(e => e.span_id));
+  const nodes = visible.map((event, index) => ({ event, key: `${event.event_seq ?? index}:${event.span_id || event.name || 'event'}`, parent: event.parent_span_id || event.parent_id || null, children: [] }));
+  const spans = new Map(nodes.filter(node => node.event.kind === 'span_start' && node.event.span_id).map(node => [node.event.span_id, node]));
+  const roots = [];
+  const reaches = (node, parent) => { for (let current = parent; current; current = spans.get(current.parent)) if (current === node) return true; return false; };
+  nodes.forEach(node => {
+    const parent = node.parent && spans.get(node.parent);
+    if (parent && parent !== node && !reaches(node, parent)) parent.children.push(node);
+    else roots.push({ ...node, orphan: Boolean(node.parent && !starts.has(node.parent)) });
+  });
+  const render = (node, depth) => {
+    const event = node.event, attrs = event.attributes || {}, isTool = event.name === 'tool.call' || Boolean(attrs.tool_name);
+    const ends = events.find(item => item.kind === 'span_end' && item.span_id && item.span_id === event.span_id);
+    const endAttrs = ends?.attributes || {}, meta = [], duration = endAttrs.duration_ms ?? attrs.duration_ms;
+    if (Number.isFinite(Number(duration))) meta.push(`${Number(duration).toFixed(1)}ms`);
+    if (ends?.status || event.status) meta.push(ends?.status || event.status);
+    if (attrs.model) meta.push(String(attrs.model));
+    const label = isTool ? (attrs.tool_name || 'unnamed tool') : (event.name || event.span_id || 'event');
+    const preview = endAttrs.output_preview || attrs.output_preview;
+    const expandable = node.children.length > 0;
+    const toggle = expandable ? `<button type="button" class="trace-tree-toggle" data-trace-node="${esc(node.key)}" aria-expanded="true">⌄</button>` : '<span class="trace-tree-stem"></span>';
+    const childRows = node.children.map(child => render(child, depth + 1)).join('');
+    return `<li class="trace-event trace-tree-event ${isTool?'tool-event':''} ${node.orphan?'orphan-event':''}" data-trace-branch="${esc(node.key)}" style="--trace-depth:${depth}">${toggle}<span class="trace-kind">${esc(isTool?'TOOL':String(event.kind || 'EVENT').replace('span_start','SPAN'))}</span><span class="trace-body"><strong class="trace-name">${esc(label)}</strong>${meta.length?`<span class="trace-meta">${esc(meta.join(' · '))}</span>`:''}${preview?`<span class="trace-preview">${esc(String(preview).replace(/\s+/g,' ').slice(0,180))}</span>`:''}${node.orphan?'<span class="trace-orphan">missing parent span</span>':''}</span>${childRows ? `<ol class="trace-tree-children">${childRows}</ol>` : ''}</li>`;
+  };
+  return roots.map(node => render(node, 0));
+}
+function renderTrace() {
+  const tabs = document.querySelectorAll('[data-trace-view]'), tree = state.traceView === 'tree';
+  tabs.forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.traceView === state.traceView)));
+  const rows = tree ? traceTreeRows(state.traceEvents) : traceRows(state.traceEvents);
+  document.querySelector('#trace-list').classList.toggle('trace-tree', tree);
+  document.querySelector('#trace-list').innerHTML = rows.join('') || '<li class="empty">No trace artifact.</li>';
+  document.querySelectorAll('[data-trace-node]').forEach(button => button.addEventListener('click', () => {
+    const branch = document.querySelector(`[data-trace-branch="${CSS.escape(button.dataset.traceNode)}"]`);
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    button.setAttribute('aria-expanded', String(expanded));
+    branch?.classList.toggle('collapsed', !expanded);
+  }));
+}
 function diffModel(diff, changedFiles) {
   const lines = String(diff || '').split('\n');
   const fromHeaders = lines.map(line => line.match(/^diff --git a\/(.+) b\/(.+)$/)?.[2]).filter(Boolean);
@@ -342,5 +498,5 @@ function renderDiff(diff, changedFiles) {
   document.querySelector('#diff-status').textContent = patch ? 'raw patch · color coded' : 'no patch';
   document.querySelector('#diff').innerHTML = patch ? patch.split('\n').map(line => { const cls=line.startsWith('+')&&!line.startsWith('+++')?'diff-add':line.startsWith('-')&&!line.startsWith('---')?'diff-remove':line.startsWith('@@')?'diff-hunk':line.startsWith('diff --git')?'diff-file':''; return `<span class="diff-line ${cls}">${esc(line)||' '}</span>`; }).join('') : '<span class="empty">No diff artifact.</span>';
 }
-async function showTrial(id) { let d; try { d=await api(`/api/trials/${encodeURIComponent(id)}`); } catch { return; } const r=d.result, behavior=r.behavior||{}, capabilities=behavior.adapter_capabilities||{}, unavailable=Object.entries(behavior.unavailable||{}); const supported=Object.entries(capabilities).filter(([key,value])=>key!=='schema_version'&&value===true).map(([key])=>key.replaceAll('_',' ')); const capabilityChip=supported.length?`capability ${behavior.capability_source||'snapshot'}: ${supported.join(', ')}`:`capability ${behavior.capability_source||'unavailable'}`; const evidenceChips=unavailable.slice(0,2).map(([metric,reason])=>`N/A ${metric}: ${reason}`); const modelUsage=capabilities.model_usage===true&&hasNumber(r.model_usage?.total_tokens)?`${Math.round(Number(r.model_usage.total_tokens)).toLocaleString()} tokens`:'N/A tokens'; document.querySelector('#detail-empty').hidden=true; document.querySelector('#detail').hidden=false; document.querySelector('#detail-title').textContent=r.trial_id; const s=document.querySelector('#detail-status'); s.textContent=r.status; s.className=`status ${r.evaluation?.passed?'ok':'bad'}`; document.querySelector('#detail-stats').innerHTML=[`agent ${r.agent_version}`,`profile ${r.agent_profile||'default'}`,capabilityChip,...evidenceChips,modelUsage,`${r.changed_files?.length||0} files`].map(x=>`<span class="chip">${esc(x)}</span>`).join(''); const trace=traceRows(d.trace || []); document.querySelector('#trace-list').innerHTML=trace.join('')||'<li class="empty">No trace artifact.</li>'; renderDiff(r.git_diff, r.changed_files); document.querySelector('.detail-panel').scrollIntoView({behavior:'smooth',block:'nearest'}); }
-document.querySelector('#refresh').onclick=load; document.querySelector('#version-filter').onchange=applyFilters; document.querySelector('#outcome-filter').onchange=applyFilters; document.querySelector('#case-select').onchange=e=>renderCaseDetail(e.target.value, false); document.querySelectorAll('.metric-tabs [data-metric]').forEach(tab=>tab.onclick=()=>{state.metric=tab.dataset.metric;if(state.selectedCase)renderCaseDetail(state.selectedCase,false);}); document.querySelector('#close-case').onclick=()=>{document.querySelector('#case-detail-panel').hidden=true;state.selectedCase=null;renderMatrix();}; load();
+async function showTrial(id) { if (!state.runtimeAvailable) return; let response; try { response=await api(`/api/trials/${encodeURIComponent(id)}`); } catch { return; } if (response.available !== true || !sameContext(state.context, response.context)) return; const d=response.data || {}, r=d.result, behavior=r.behavior||{}, capabilities=behavior.adapter_capabilities||{}, unavailable=Object.entries(behavior.unavailable||{}), provenance=r.evidence_provenance||behavior.evidence_provenance||{}; const supported=Object.entries(capabilities).filter(([key,value])=>key!=='schema_version'&&value===true).map(([key])=>key.replaceAll('_',' ')); const capabilityChip=supported.length?`capability ${behavior.capability_source||'snapshot'}: ${supported.join(', ')}`:`capability ${behavior.capability_source||'unavailable'}`; const origins=[...new Set(Object.values(provenance).filter(value=>value&&value!=='not_observed'))]; const originChip=origins.length?`evidence ${origins.join(' · ')}`:'evidence not observed'; const evidenceChips=unavailable.slice(0,2).map(([metric,reason])=>`N/A ${metric}: ${reason}`); const modelUsage=capabilities.model_usage===true&&hasNumber(r.model_usage?.total_tokens)?`${Math.round(Number(r.model_usage.total_tokens)).toLocaleString()} tokens`:'N/A tokens'; document.querySelector('#detail-empty').hidden=true; document.querySelector('#detail').hidden=false; document.querySelector('#trace-diff-panel').hidden=true; document.querySelector('#detail-title').textContent=r.trial_id; const s=document.querySelector('#detail-status'); s.textContent=r.status; s.className=`status ${r.evaluation?.passed?'ok':'bad'}`; document.querySelector('#detail-stats').innerHTML=[`agent ${r.agent_version}`,`profile ${r.agent_profile||'default'}`,originChip,capabilityChip,...evidenceChips,modelUsage,`${r.changed_files?.length||0} files`].map(x=>`<span class="chip">${esc(x)}</span>`).join(''); state.traceEvents=d.trace || []; renderTrace(); renderDiff(r.git_diff, r.changed_files); document.querySelector('.detail-panel').scrollIntoView({behavior:'smooth',block:'nearest'}); }
+document.querySelector('#refresh').onclick=load; document.querySelector('#version-filter').onchange=applyFilters; document.querySelector('#outcome-filter').onchange=applyFilters; document.querySelector('#case-select').onchange=e=>renderCaseDetail(e.target.value, false); document.querySelectorAll('.metric-tabs [data-metric]').forEach(tab=>tab.onclick=()=>{state.metric=tab.dataset.metric;if(state.selectedCase)renderCaseDetail(state.selectedCase,false);}); document.querySelectorAll('[data-trace-view]').forEach(tab=>tab.onclick=()=>{state.traceView=tab.dataset.traceView;renderTrace();}); document.querySelector('#close-case').onclick=()=>{document.querySelector('#case-detail-panel').hidden=true;state.selectedCase=null;renderMatrix();}; load();

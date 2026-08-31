@@ -1,0 +1,388 @@
+{
+  "adapter_id": "external-command",
+  "adapter_version": "external-agent-v1",
+  "agent_exit_reason": "model_completed",
+  "agent_profile": "targeted-context-verify-v3",
+  "agent_response": "Fixed. The change is minimal and confined to `src/resolver.py`:\n\n**Problem:** `resolve_settings` ignored `extends` entirely — it always returned only the profile's own settings, so parent settings were dropped and unknown parents were silently ignored.\n\n**Fix:** When a profile has a parent, recursively resolve the parent's settings first, then merge the child's own settings on top (`settings.update(...)`), so:\n- **Multi-level inheritance** works (`canary` → `staging` → `base`), merging each level in order.\n- **Child settings override parent settings** because the child's `update` happens last.\n- **Unknown parents raise `KeyError`** (from `profiles[name]` in the recursive lookup) instead of being silently skipped — matching the catalog's responsibility as the parent-name source.\n\nThe responsibility split is preserved: `src/catalog.py` still only answers \"what is this profile's parent?\", while `src/resolver.py` owns the merge/precedence logic.\n\nVerification with `python -m unittest discover -s tests -v` passed — both displayed test cases report `ok`, and no failure/error was produced.",
+  "agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "agent_source_hash_matches_protocol": true,
+  "agent_stderr": "",
+  "agent_stdout": "",
+  "agent_version": "external-openai-v3",
+  "allowed_paths": [
+    "src/**"
+  ],
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "bash"
+  ],
+  "attempt_id": "attempt_001",
+  "attempt_path": "<local-path>",
+  "behavior": {
+    "availability": {
+      "duplicate_reads": true,
+      "edit_before_read": true,
+      "repeated_tool_calls": true,
+      "test_retries": false,
+      "tool_outcomes": true
+    },
+    "closed_tool_calls": 9,
+    "denied_tool_attempts": 0,
+    "duplicate_read_rate": 0.25,
+    "edit_before_read_count": 0,
+    "repeated_tool_call_rate": 0.3333333333333333,
+    "test_retry_count": null,
+    "tool_breakdown": {
+      "bash": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "edit_file": {
+        "calls": 1,
+        "denied": 0,
+        "error": 0,
+        "ok": 1
+      },
+      "glob": {
+        "calls": 2,
+        "denied": 0,
+        "error": 0,
+        "ok": 2
+      },
+      "read_file": {
+        "calls": 4,
+        "denied": 0,
+        "error": 0,
+        "ok": 4
+      }
+    },
+    "tool_calls": 9,
+    "tool_error_rate": 0.0,
+    "tool_success_rate": 1.0,
+    "unavailable": {
+      "test_retry_count": "test.run spans are not emitted in this SDK version"
+    },
+    "version": 1
+  },
+  "budget": {
+    "max_duration_ms": 180000,
+    "max_tool_calls": 18
+  },
+  "changed_files": [
+    "src/resolver.py"
+  ],
+  "denied_tools": [
+    "spawn_teammate",
+    "connect_mcp",
+    "schedule_cron",
+    "create_worktree",
+    "remove_worktree",
+    "keep_worktree"
+  ],
+  "error": null,
+  "evaluation": {
+    "passed": true,
+    "scores": [
+      {
+        "actual": {
+          "errors": 0,
+          "exit_code": 0,
+          "failures": 0,
+          "run": 3,
+          "skipped": 0
+        },
+        "evaluator": "test",
+        "evidence": {
+          "stderr": "test_child_inherits_unspecified_parent_settings (test_resolver.ConfigInheritanceTests.test_child_inherits_unspecified_parent_settings) ... ok\ntest_nested_inheritance_keeps_child_precedence (test_resolver.ConfigInheritanceTests.test_nested_inheritance_keeps_child_precedence) ... ok\ntest_unknown_parent_is_not_silently_ignored (test_resolver.ConfigInheritanceTests.test_unknown_parent_is_not_silently_ignored) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+          "stdout": ""
+        },
+        "expected": {
+          "exit_code": 0,
+          "min_tests": 1
+        },
+        "message": "tests passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "changed_files": [
+            "src/resolver.py"
+          ],
+          "violations": []
+        },
+        "evaluator": "path_policy",
+        "evidence": {
+          "violating_files": []
+        },
+        "expected": {
+          "allowed": [
+            "src/**"
+          ],
+          "forbidden": [
+            "tests/**"
+          ]
+        },
+        "message": "path policy passed",
+        "passed": true
+      },
+      {
+        "actual": {
+          "errors": [],
+          "event_count": 35,
+          "span_count": 17,
+          "trace_id": "trace_3b9472636050",
+          "valid": true
+        },
+        "evaluator": "trace_completeness",
+        "evidence": {
+          "errors": [],
+          "trace_id": "trace_3b9472636050"
+        },
+        "expected": {
+          "valid": true
+        },
+        "message": "trace is complete",
+        "passed": true
+      },
+      {
+        "actual": {
+          "added_lines": 3,
+          "binary": false,
+          "deleted_lines": 2,
+          "evidence_complete": true,
+          "files": 1,
+          "violations": []
+        },
+        "evaluator": "diff",
+        "evidence": {
+          "changed_files": [
+            "src/resolver.py"
+          ],
+          "patch": "diff --git a/src/resolver.py b/src/resolver.py\nindex de5f98b..9e1bc4b 100644\n--- a/src/resolver.py\n+++ b/src/resolver.py\n@@ -13,6 +13,7 @@ def resolve_settings(profiles, name):\n     profile = profiles[name]\n     parent = parent_name(profile)\n     if parent:\n-        # BUG: inheritance currently ignores every parent profile.\n-        return dict(profile.get(\"settings\", {}))\n+        settings = resolve_settings(profiles, parent)\n+        settings.update(profile.get(\"settings\", {}))\n+        return settings\n     return dict(profile.get(\"settings\", {}))\n"
+        },
+        "expected": {
+          "max_added_lines": 300,
+          "max_deleted_lines": 300,
+          "max_files": 10,
+          "require_change": true
+        },
+        "message": "diff within policy",
+        "passed": true
+      },
+      {
+        "actual": {
+          "denied_attempts": [],
+          "missing_end": [],
+          "tool_calls": 9,
+          "unauthorized": []
+        },
+        "evaluator": "tool_integrity",
+        "evidence": {
+          "trace_path": "<local-path>",
+          "violations": []
+        },
+        "expected": {
+          "allowed_tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "read_file",
+            "write_file"
+          ]
+        },
+        "message": "tool spans are paired",
+        "passed": true
+      },
+      {
+        "actual": {
+          "duration_ms": 19047.865,
+          "tool_calls": 9,
+          "violations": []
+        },
+        "evaluator": "budget",
+        "evidence": {
+          "trace_path": "<local-path>"
+        },
+        "expected": {
+          "max_duration_ms": 180000.0,
+          "max_tool_calls": 18
+        },
+        "message": "within budget",
+        "passed": true
+      }
+    ]
+  },
+  "expected_agent_source_hash": "sha256:967e4861b0c7daf84e6440275927dfa8761dd827920d9c812fc221c4f88662d7",
+  "failure_attribution": {
+    "kind": "passed",
+    "reason": "valid_platform_evidence"
+  },
+  "forbidden_paths": [
+    "tests/**"
+  ],
+  "git_diff": "diff --git a/src/resolver.py b/src/resolver.py\nindex de5f98b..9e1bc4b 100644\n--- a/src/resolver.py\n+++ b/src/resolver.py\n@@ -13,6 +13,7 @@ def resolve_settings(profiles, name):\n     profile = profiles[name]\n     parent = parent_name(profile)\n     if parent:\n-        # BUG: inheritance currently ignores every parent profile.\n-        return dict(profile.get(\"settings\", {}))\n+        settings = resolve_settings(profiles, parent)\n+        settings.update(profile.get(\"settings\", {}))\n+        return settings\n     return dict(profile.get(\"settings\", {}))\n",
+  "git_evidence": {
+    "base_revision": "ab51e00820bcd54891d94a7d4545b92a5a519657",
+    "captures_untracked": true,
+    "diff_base": "HEAD",
+    "status_porcelain": " M src/resolver.py\n"
+  },
+  "model_failure": null,
+  "model_usage": {
+    "completion_tokens": 1900,
+    "prompt_tokens": 12530,
+    "total_tokens": 14430
+  },
+  "protocol_fingerprint": "sha256:9ff49800a38fd197d457ec89873dd334870d80abe10df14f4f370094ba3ccdba",
+  "run_store": null,
+  "schedule_index": 38,
+  "scores": [
+    {
+      "actual": {
+        "errors": 0,
+        "exit_code": 0,
+        "failures": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "evaluator": "test",
+      "evidence": {
+        "stderr": "test_child_inherits_unspecified_parent_settings (test_resolver.ConfigInheritanceTests.test_child_inherits_unspecified_parent_settings) ... ok\ntest_nested_inheritance_keeps_child_precedence (test_resolver.ConfigInheritanceTests.test_nested_inheritance_keeps_child_precedence) ... ok\ntest_unknown_parent_is_not_silently_ignored (test_resolver.ConfigInheritanceTests.test_unknown_parent_is_not_silently_ignored) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+        "stdout": ""
+      },
+      "expected": {
+        "exit_code": 0,
+        "min_tests": 1
+      },
+      "message": "tests passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "changed_files": [
+          "src/resolver.py"
+        ],
+        "violations": []
+      },
+      "evaluator": "path_policy",
+      "evidence": {
+        "violating_files": []
+      },
+      "expected": {
+        "allowed": [
+          "src/**"
+        ],
+        "forbidden": [
+          "tests/**"
+        ]
+      },
+      "message": "path policy passed",
+      "passed": true
+    },
+    {
+      "actual": {
+        "errors": [],
+        "event_count": 35,
+        "span_count": 17,
+        "trace_id": "trace_3b9472636050",
+        "valid": true
+      },
+      "evaluator": "trace_completeness",
+      "evidence": {
+        "errors": [],
+        "trace_id": "trace_3b9472636050"
+      },
+      "expected": {
+        "valid": true
+      },
+      "message": "trace is complete",
+      "passed": true
+    },
+    {
+      "actual": {
+        "added_lines": 3,
+        "binary": false,
+        "deleted_lines": 2,
+        "evidence_complete": true,
+        "files": 1,
+        "violations": []
+      },
+      "evaluator": "diff",
+      "evidence": {
+        "changed_files": [
+          "src/resolver.py"
+        ],
+        "patch": "diff --git a/src/resolver.py b/src/resolver.py\nindex de5f98b..9e1bc4b 100644\n--- a/src/resolver.py\n+++ b/src/resolver.py\n@@ -13,6 +13,7 @@ def resolve_settings(profiles, name):\n     profile = profiles[name]\n     parent = parent_name(profile)\n     if parent:\n-        # BUG: inheritance currently ignores every parent profile.\n-        return dict(profile.get(\"settings\", {}))\n+        settings = resolve_settings(profiles, parent)\n+        settings.update(profile.get(\"settings\", {}))\n+        return settings\n     return dict(profile.get(\"settings\", {}))\n"
+      },
+      "expected": {
+        "max_added_lines": 300,
+        "max_deleted_lines": 300,
+        "max_files": 10,
+        "require_change": true
+      },
+      "message": "diff within policy",
+      "passed": true
+    },
+    {
+      "actual": {
+        "denied_attempts": [],
+        "missing_end": [],
+        "tool_calls": 9,
+        "unauthorized": []
+      },
+      "evaluator": "tool_integrity",
+      "evidence": {
+        "trace_path": "<local-path>",
+        "violations": []
+      },
+      "expected": {
+        "allowed_tools": [
+          "bash",
+          "edit_file",
+          "glob",
+          "read_file",
+          "write_file"
+        ]
+      },
+      "message": "tool spans are paired",
+      "passed": true
+    },
+    {
+      "actual": {
+        "duration_ms": 19047.865,
+        "tool_calls": 9,
+        "violations": []
+      },
+      "evaluator": "budget",
+      "evidence": {
+        "trace_path": "<local-path>"
+      },
+      "expected": {
+        "max_duration_ms": 180000.0,
+        "max_tool_calls": 18
+      },
+      "message": "within budget",
+      "passed": true
+    }
+  ],
+  "status": "completed",
+  "test_duration_ms": 256.9395829923451,
+  "test_exit_code": 0,
+  "test_stderr": "test_child_inherits_unspecified_parent_settings (test_resolver.ConfigInheritanceTests.test_child_inherits_unspecified_parent_settings) ... ok\ntest_nested_inheritance_keeps_child_precedence (test_resolver.ConfigInheritanceTests.test_nested_inheritance_keeps_child_precedence) ... ok\ntest_unknown_parent_is_not_silently_ignored (test_resolver.ConfigInheritanceTests.test_unknown_parent_is_not_silently_ignored) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n",
+  "test_stdout": "",
+  "trace_id": "trace_3b9472636050",
+  "trace_path": "trace.jsonl",
+  "trace_validation": {
+    "errors": [],
+    "event_count": 35,
+    "span_count": 17,
+    "trace_id": "trace_3b9472636050",
+    "valid": true
+  },
+  "trial_id": "config_inheritance_precedence_trial_001"
+}

@@ -6,6 +6,7 @@
   <title>Regression Lab · Release Desk</title>
   <link rel="stylesheet" href="./style.css">
   <link rel="stylesheet" href="./case-explorer.css">
+  <link rel="stylesheet" href="./redesign.css">
 </head>
 <body>
   <header class="masthead">
@@ -16,16 +17,18 @@
   <main id="top">
     <section class="hero">
       <div><p class="eyebrow">CANDIDATE PROMOTION</p><h1>Should this agent<br><em>ship?</em></h1></div>
-      <div id="gate-card" class="gate-card" aria-live="polite"></div>
+      <div id="gate-card" class="gate-card" data-runtime-evidence aria-live="polite"></div>
     </section>
-    <section class="decision-spine" aria-labelledby="decision-spine-title">
+    <section id="console-context" class="console-context" aria-live="polite"></section>
+    <section id="runtime-context-error" class="runtime-context-error" hidden aria-live="polite"></section>
+    <section class="decision-spine" data-runtime-evidence aria-labelledby="decision-spine-title">
       <div class="decision-spine-head">
         <div><p class="eyebrow">DECISION PATH</p><h2 id="decision-spine-title">Follow the evidence, not the headline.</h2></div>
         <p>Policy decision → statistical confidence → coverage → primary Case</p>
       </div>
       <div id="decision-spine-content" class="decision-spine-content" aria-live="polite"></div>
     </section>
-    <section class="metrics" aria-label="Experiment summary">
+    <section class="metrics" data-runtime-evidence aria-label="Experiment summary">
       <article><span>ACTIVE TRIALS</span><strong id="trial-count">—</strong></article>
       <article><span>ALL-ATTEMPT PASS Δ</span><strong id="pass-delta">—</strong></article>
       <article><span>VALID-PAIR LATENCY Δ</span><strong id="duration-delta">—</strong></article>
@@ -33,7 +36,7 @@
       <article><span>ALL-PASS@3 Δ</span><strong id="reliability">—</strong></article>
     </section>
 
-    <section class="workspace">
+    <section class="workspace" data-runtime-evidence>
       <section class="panel comparison-panel" aria-labelledby="comparison-title">
         <div class="panel-head"><div><p class="eyebrow">DECISION MATRIX</p><h2 id="comparison-title">Case comparison</h2></div><button id="refresh" type="button">Refresh ↻</button></div>
         <p class="panel-note">Each row aligns the same Case across both versions. Select a row to compare all Trials side by side.</p>
@@ -48,7 +51,7 @@
       </aside>
     </section>
 
-    <section class="evidence-deck" aria-label="Evaluation metrics v2">
+    <section class="evidence-deck" data-runtime-evidence aria-label="Evaluation metrics v2">
       <section class="panel evidence-panel" aria-labelledby="stability-title">
         <div class="panel-head"><div><p class="eyebrow">REPEATABILITY CHECK</p><h2 id="stability-title">Stability over repeats</h2></div><span class="section-hint">all-pass@3 / flaky cases</span></div>
         <div id="stability-content" class="evidence-content"></div>
@@ -84,12 +87,12 @@
       <div id="evolution-content" class="evolution-content"></div>
     </section>
 
-    <section class="panel protocol-panel" aria-labelledby="protocol-title">
+    <section class="panel protocol-panel" data-runtime-evidence aria-labelledby="protocol-title">
       <div class="panel-head"><div><p class="eyebrow">EXPERIMENT CONTRACT</p><h2 id="protocol-title">Protocol snapshot</h2></div><span id="protocol-hint" class="section-hint">loading</span></div>
       <div id="protocol-content" class="protocol-content"></div>
     </section>
 
-    <section id="case-detail-panel" class="panel case-detail" hidden aria-live="polite">
+    <section id="case-detail-panel" class="panel case-detail" data-runtime-evidence hidden aria-live="polite">
       <div class="panel-head"><div><p class="eyebrow">CASE EXPLORER</p><h2 id="case-detail-title">Select a Case</h2></div><button id="close-case" type="button">Close ×</button></div>
       <div class="case-controls">
         <label class="case-picker">Case<select id="case-select" aria-label="Select a Case"></select></label>
@@ -111,18 +114,18 @@
       <div id="case-detail-content" class="paired-runs"></div>
     </section>
 
-    <section class="panel triage-panel" aria-labelledby="triage-title">
+    <section class="panel triage-panel" data-runtime-evidence aria-labelledby="triage-title">
       <div class="panel-head"><div><p class="eyebrow">RAW ARTIFACT INDEX</p><h2 id="triage-title">Trial triage</h2></div><div class="filters"><label>Version <select id="version-filter"><option value="all">All</option></select></label><label>Outcome <select id="outcome-filter"><option value="all">All</option><option value="pass">Pass</option><option value="fail">Needs review</option></select></label></div></div>
       <div class="table-wrap"><table><thead><tr><th>Case / Trial</th><th>Version</th><th>Outcome</th><th>Tools</th><th>Latency</th><th>Tokens</th></tr></thead><tbody id="trial-rows"></tbody></table></div>
     </section>
 
-    <section class="panel detail-panel" aria-live="polite" aria-labelledby="detail-title">
+    <section class="panel detail-panel" data-runtime-evidence aria-live="polite" aria-labelledby="detail-title">
       <div class="panel-head"><div><p class="eyebrow">TRACE INSPECTOR</p><h2 id="detail-title">Select a Trial</h2></div><span id="detail-status" class="status muted">WAITING</span></div>
       <div id="detail-empty" class="empty big">Choose a Trial from the paired Case view or raw index to inspect Trace, tools, Diff and evaluator evidence.</div>
-      <div id="detail" hidden><div class="detail-stats" id="detail-stats"></div><div class="detail-grid"><section><div class="detail-section-head"><h3>Tool / span timeline</h3><span class="section-hint">resolved tool names</span></div><ol id="trace-list" class="trace-list"></ol></section><section class="diff-section"><div class="detail-section-head"><h3>Git diff</h3><span id="diff-status" class="section-hint">raw patch</span></div><div id="diff-summary" class="diff-summary"></div><pre id="diff" class="diff"></pre></section></div></div>
+      <div id="detail" hidden><div class="detail-stats" id="detail-stats"></div><section id="trace-diff-panel" class="trace-diff-panel" hidden><div class="detail-section-head"><h3>Synchronized Trace Diff</h3><span id="trace-diff-summary" class="section-hint trace-diff-summary"></span></div><div class="trace-diff-table"><div class="trace-diff-header"><span>Baseline</span><span>Delta</span><span>Candidate</span></div><div id="trace-diff-rows" class="trace-diff-rows"></div></div></section><div class="detail-grid"><section><div class="detail-section-head"><h3>Trace structure</h3><div class="trace-view-tabs" role="tablist" aria-label="Trace view"><button type="button" role="tab" data-trace-view="tree" aria-selected="true">Tree</button><button type="button" role="tab" data-trace-view="timeline" aria-selected="false">Timeline</button></div></div><ol id="trace-list" class="trace-list"></ol></section><section class="diff-section"><div class="detail-section-head"><h3>Git diff</h3><span id="diff-status" class="section-hint">raw patch</span></div><div id="diff-summary" class="diff-summary"></div><pre id="diff" class="diff"></pre></section></div></div>
     </section>
   </main>
   <footer>READ-ONLY LOCAL CONSOLE · DECISION / CASE / TRACE / DIFF / POLICY</footer>
-  <script src="./app.js?v=1.0.2"></script>
+  <script src="./app.js?v=1.1.0"></script>
 </body>
 </html>
