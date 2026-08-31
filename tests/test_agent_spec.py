@@ -129,7 +129,15 @@ class AgentSpecTests(unittest.TestCase):
             dependency = root / "prompts.py"
             source.write_text("from prompts import SYSTEM\n", encoding="utf-8")
             dependency.write_text("SYSTEM = 'first'\n", encoding="utf-8")
-            for command in (["git", "init"], ["git", "add", "."], ["git", "commit", "-m", "initial"]):
+            for command in (
+                ["git", "init"],
+                ["git", "add", "."],
+                [
+                    "git", "-c", "user.name=Regression Lab Test",
+                    "-c", "user.email=test@example.invalid",
+                    "commit", "-m", "initial",
+                ],
+            ):
                 subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
             spec = load_agent_spec(self._write(root, self._base([sys.executable, str(source)])))
             before = spec.snapshot()
@@ -146,7 +154,15 @@ class AgentSpecTests(unittest.TestCase):
             root = Path(directory)
             source = root / "agent.py"
             source.write_text("print('agent')\n", encoding="utf-8")
-            for command in (("git", "init"), ("git", "add", "."), ("git", "commit", "-m", "initial")):
+            for command in (
+                ("git", "init"),
+                ("git", "add", "."),
+                (
+                    "git", "-c", "user.name=Regression Lab Test",
+                    "-c", "user.email=test@example.invalid",
+                    "commit", "-m", "initial",
+                ),
+            ):
                 subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
             value = self._base([sys.executable, "{agent_source}/agent.py", "--workspace", "{workspace}", "--task", "{task}"])
             value["runtime"]["source_root"] = str(root)
@@ -165,7 +181,15 @@ class AgentSpecTests(unittest.TestCase):
             (package / "__main__.py").write_text("from .prompts import SYSTEM\n", encoding="utf-8")
             prompts = package / "prompts.py"
             prompts.write_text("SYSTEM = 'first'\n", encoding="utf-8")
-            for command in (["git", "init"], ["git", "add", "."], ["git", "commit", "-m", "initial"]):
+            for command in (
+                ["git", "init"],
+                ["git", "add", "."],
+                [
+                    "git", "-c", "user.name=Regression Lab Test",
+                    "-c", "user.email=test@example.invalid",
+                    "commit", "-m", "initial",
+                ],
+            ):
                 subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
             with mock.patch.dict(os.environ, {"PYTHONPATH": str(root)}, clear=False):
                 spec = load_agent_spec(self._write(root, self._base([
