@@ -343,6 +343,47 @@ def describe_prompt_profiles(command: list[str] | None, agents: list[dict[str, s
     return validated
 
 
+def _execution_pairs(execution_plan: dict) -> list[list[dict]]:
+    """从冻结计划恢复 Pair；历史计划按旧配对键兼容恢复。"""
+
+    entries = execution_plan.get("entries")
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise ValueError("Execution plan entries are invalid")
+
+    by_schedule_index: dict[int, dict] = {}
+    for entry in entries:
+        schedule_index = entry.get("schedule_index")
+        if not isinstance(schedule_index, int) or schedule_index in by_schedule_index:
+            raise ValueError("Execution plan schedule indexes are invalid")
+        by_schedule_index[schedule_index] = entry
+
+    persisted_pairs = execution_plan.get("pairs")
+    if isinstance(persisted_pairs, list):
+        pairs: list[list[dict]] = []
+        referenced_indexes: set[int] = set()
+        for pair in persisted_pairs:
+            indexes = pair.get("entry_schedule_indices") if isinstance(pair, dict) else None
+            if not isinstance(indexes, list) or not indexes:
+                raise ValueError("Execution plan pair is invalid")
+            if any(not isinstance(index, int) or index not in by_schedule_index for index in indexes):
+                raise ValueError("Execution plan pair references an unknown entry")
+            if any(index in referenced_indexes for index in indexes):
+                raise ValueError("Execution plan entry belongs to multiple pairs")
+            referenced_indexes.update(indexes)
+            pairs.append([by_schedule_index[index] for index in indexes])
+        if set(by_schedule_index) != referenced_indexes:
+            raise ValueError("Execution plan pair coverage is incomplete")
+        return pairs
+
+    # 历史串行计划没有 Pair 字段；按原有条目顺序恢复同一逻辑单元，不改写旧 Artifact。
+    grouped: dict[tuple[object, object, object], list[dict]] = {}
+    for entry in entries:
+        grouped.setdefault((entry.get("case_id"), entry.get("trial_index"), entry.get("job_id")), []).append(entry)
+    if not grouped:
+        raise ValueError("Execution plan has no pairs")
+    return list(grouped.values())
+
+
 def _run_execution_plan(
     execution_plan: dict,
     *,
@@ -428,34 +469,16 @@ def _run_execution_plan(
             print(completed.stderr, file=sys.stderr)
         return completed.returncode
 
-    entries = execution_plan.get("entries")
-    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
-        return 2
-    by_schedule_index = {
-        entry.get("schedule_index"): entry
-        for entry in entries
-        if isinstance(entry.get("schedule_index"), int)
-    }
-    persisted_pairs = execution_plan.get("pairs")
-    if isinstance(persisted_pairs, list):
-        pairs = [
-            [by_schedule_index[index] for index in pair.get("entry_schedule_indices", []) if index in by_schedule_index]
-            for pair in persisted_pairs if isinstance(pair, dict)
-        ]
-    else:
-        # 历史串行计划没有 Pair 字段；按原有条目顺序恢复同一逻辑单元，不改写旧 Artifact。
-        grouped: dict[tuple[object, object, object], list[dict]] = {}
-        for entry in entries:
-            grouped.setdefault((entry.get("case_id"), entry.get("trial_index"), entry.get("job_id")), []).append(entry)
-        pairs = list(grouped.values())
-    if not pairs or any(not pair for pair in pairs):
+    try:
+        pairs = _execution_pairs(execution_plan)
+    except ValueError:
         return 2
     concurrency = execution_plan.get("concurrency", 1)
     if concurrency not in {1, 2}:
         return 2
 
     def run_pair(pair: list[dict]) -> int:
-        # 同一 Pair 内永远等待前一版本结束，避免两侧共享时间窗口而破坏配对语义。
+        # Pair 内固定 baseline → candidate 并等待前一版本结束，避免共享时间窗口破坏配对语义。
         for entry in pair:
             returncode = run_entry(entry)
             if returncode not in {0, 1}:

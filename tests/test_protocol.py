@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from regression_lab.protocol import build_execution_plan, build_protocol, compare_protocols, protocol_fingerprint
-from scripts.run_experiment import _attempt_source_comparability, _freeze_or_restore_protocol, _run_execution_plan, describe_prompt_profiles, parse_external_arm_configs
+from scripts.run_experiment import _attempt_source_comparability, _execution_pairs, _freeze_or_restore_protocol, _run_execution_plan, describe_prompt_profiles, parse_external_arm_configs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -229,6 +229,36 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(pair["agent_order"], ["baseline", "candidate"])
             entries = [entry for entry in plan["entries"] if entry["pair_id"] == pair["pair_id"]]
             self.assertEqual([entry["agent_label"] for entry in entries], ["baseline", "candidate"])
+
+    def test_execution_pairs_restore_frozen_and_historical_plans(self):
+        jobs = [
+            {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
+            {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
+        ]
+        plan = build_execution_plan(jobs, self._comparison_agents(), seed=7, concurrency=2)
+
+        frozen_pairs = _execution_pairs(plan)
+        historical_pairs = _execution_pairs({"entries": plan["entries"]})
+
+        self.assertEqual(
+            [[entry["schedule_index"] for entry in pair] for pair in frozen_pairs],
+            [pair["entry_schedule_indices"] for pair in plan["pairs"]],
+        )
+        self.assertEqual(
+            [[entry["agent_label"] for entry in pair] for pair in historical_pairs],
+            [["baseline", "candidate"], ["baseline", "candidate"]],
+        )
+
+    def test_execution_pairs_reject_invalid_frozen_pair_references(self):
+        plan = build_execution_plan(
+            [{"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"}],
+            self._comparison_agents(),
+            seed=7,
+        )
+        plan["pairs"][0]["entry_schedule_indices"] = [999]
+
+        with self.assertRaisesRegex(ValueError, "unknown entry"):
+            _execution_pairs(plan)
 
     def test_pair_scheduler_runs_pairs_in_parallel_but_versions_in_order(self):
         jobs = [
