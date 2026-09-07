@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _prepared_request, _prepared_request_with_snapshots, _run_state, benchmark_catalog, command_for, handler_for, main, preflight, recoverable_runs, studio_presets
+from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _load_recoverable_request, _prepared_request, _prepared_request_with_snapshots, _run_state, _start_experiment_process, benchmark_catalog, command_for, handler_for, main, preflight, recoverable_runs, studio_presets
 
 
 class RunStudioTests(unittest.TestCase):
@@ -282,6 +282,55 @@ class RunStudioTests(unittest.TestCase):
             _run_state(str(runtime), "cancelled", {"launch_mode": "quick", "project_id": "project"})
             recovered = recoverable_runs()
         self.assertEqual(recovered[0]["runtime"], str(runtime))
+
+    def test_load_recoverable_request_requires_a_cancelled_platform_runtime(self):
+        with TemporaryDirectory() as directory, mock.patch("scripts.serve_studio.runtime_root", return_value=Path(directory)):
+            runtime = Path(directory) / "projects" / "project" / "experiments" / "run"
+            request = {"launch_mode": "quick", "project_id": "project"}
+            _run_state(str(runtime), "cancelled", request)
+
+            restored_runtime, restored_request = _load_recoverable_request(str(runtime))
+            _run_state(str(runtime), "completed", request)
+            with self.assertRaisesRegex(ValueError, "Runtime 不可恢复"):
+                _load_recoverable_request(str(runtime))
+
+        self.assertEqual(restored_runtime, str(runtime.resolve()))
+        self.assertEqual(restored_request, request)
+
+    def test_start_experiment_process_cleans_snapshots_when_process_creation_fails(self):
+        snapshots = mock.Mock()
+        with mock.patch("scripts.serve_studio.subprocess.Popen", side_effect=OSError("unavailable")), \
+             mock.patch("scripts.serve_studio.command_for", return_value=["experiment"]):
+            with self.assertRaisesRegex(OSError, "unavailable"):
+                _start_experiment_process(
+                    StudioRun(), prepared_request={}, source_snapshots=snapshots, runtime="/tmp/runtime",
+                    original_request={}, resume=False,
+                )
+
+        snapshots.cleanup.assert_called_once()
+
+    def test_start_experiment_process_records_running_state_and_resume_command(self):
+        process, snapshots, thread = mock.Mock(), mock.Mock(), mock.Mock()
+        run = StudioRun()
+        request = {"launch_mode": "quick", "project_id": "project"}
+        with mock.patch("scripts.serve_studio.subprocess.Popen", return_value=process), \
+             mock.patch("scripts.serve_studio.command_for", return_value=["experiment"]) as command, \
+             mock.patch("scripts.serve_studio._run_state") as state, \
+             mock.patch("scripts.serve_studio.threading.Thread", return_value=thread):
+            _start_experiment_process(
+                run, prepared_request={"baseline": "baseline"}, source_snapshots=snapshots,
+                runtime="/tmp/runtime", original_request=request, resume=True,
+            )
+
+        command_request = command.call_args.args[0]
+        self.assertEqual(command_request["studio_runtime"], "/tmp/runtime")
+        self.assertTrue(command_request["resume"])
+        self.assertIs(run.process, process)
+        self.assertIs(run.source_snapshots, snapshots)
+        self.assertEqual(run.request, request)
+        self.assertEqual(run.status, "running")
+        state.assert_called_once_with("/tmp/runtime", "running", request)
+        thread.start.assert_called_once()
 
     def test_preflight_rejects_unknown_benchmark_and_out_of_range_trials(self):
         result = preflight({"benchmarks": ["outside.yaml"], "trials": 99})

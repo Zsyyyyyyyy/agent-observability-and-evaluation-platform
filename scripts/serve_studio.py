@@ -445,6 +445,59 @@ def _runtime_for(request: dict[str, object]) -> str:
     return str(runtime_root() / "projects" / project / "experiments" / f"{agent}-{baseline}-vs-{candidate}-{stamp}")
 
 
+def _load_recoverable_request(runtime: str) -> tuple[str, dict[str, object]]:
+    """读取并校验可恢复 Runtime 中冻结的 Studio 请求。"""
+
+    root = Path(runtime).resolve()
+    state_path = root / "experiment-state.json"
+    if not state_path.is_relative_to(runtime_root().resolve()) or not state_path.is_file():
+        raise ValueError("Runtime 不属于当前平台目录")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Runtime 状态不可读取") from exc
+    request = state.get("request")
+    if state.get("status") != "cancelled" or not isinstance(request, dict):
+        raise ValueError("Runtime 不可恢复")
+    return str(root), request
+
+
+def _start_experiment_process(
+    run: StudioRun,
+    *,
+    prepared_request: dict[str, object],
+    source_snapshots: GitSourceSnapshots | None,
+    runtime: str,
+    original_request: dict[str, object],
+    resume: bool,
+) -> None:
+    """启动 Experiment 子进程，并登记其 Runtime、快照和日志读取状态。"""
+
+    command_request = {**prepared_request, "studio_runtime": runtime}
+    if resume:
+        command_request["resume"] = True
+    with run.lock:
+        if run.process is not None and run.process.poll() is None:
+            if source_snapshots:
+                source_snapshots.cleanup()
+            raise RuntimeError("已有 Experiment 正在运行")
+        try:
+            process = subprocess.Popen(
+                command_for(command_request), cwd=REGRESSION, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True,
+            )
+        except OSError:
+            if source_snapshots:
+                source_snapshots.cleanup()
+            raise
+        run.process, run.source_snapshots, run.request = process, source_snapshots, original_request
+        run.status, run.runtime, run.returncode, run.logs = "running", runtime, None, []
+        if not resume:
+            run.console_url = None
+        _run_state(runtime, "running", original_request)
+        threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+
+
 def _read_run_output(run: StudioRun) -> None:
     assert run.process is not None and run.process.stdout is not None
     for line in run.process.stdout:
@@ -544,54 +597,38 @@ def handler_for(static_root: Path, run: StudioRun):
                     prepared, snapshots = _prepared_request_with_snapshots(previous)
                 except (ValueError, AgentSpecError, GitSourceError) as exc:
                     return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                prepared = {**prepared, "studio_runtime": runtime, "resume": True}
                 try:
-                    process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                except OSError:
-                    if snapshots:
-                        snapshots.cleanup()
-                    raise
-                with run.lock:
-                    run.process, run.source_snapshots = process, snapshots
-                    run.status, run.returncode, run.logs = "running", None, []
-                    _run_state(runtime, "running")
-                    threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+                    _start_experiment_process(
+                        run, prepared_request=prepared, source_snapshots=snapshots, runtime=runtime,
+                        original_request=previous, resume=True,
+                    )
+                except RuntimeError as exc:
+                    return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
                 return self._json(run_status(run), HTTPStatus.ACCEPTED)
             if path == "/api/run/recover":
                 if not isinstance(request, dict) or not isinstance(request.get("runtime"), str):
                     return self._json({"error": "Runtime 路径无效"}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                root = Path(request["runtime"]).resolve()
-                state_path = root / "experiment-state.json"
-                if not state_path.is_relative_to(runtime_root()) or not state_path.is_file():
-                    return self._json({"error": "Runtime 不属于当前平台目录"}, HTTPStatus.UNPROCESSABLE_ENTITY)
                 try:
-                    state = json.loads(state_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    return self._json({"error": "Runtime 状态不可读取"}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                previous = state.get("request")
-                if state.get("status") != "cancelled" or not isinstance(previous, dict):
-                    return self._json({"error": "Runtime 不可恢复"}, HTTPStatus.CONFLICT)
+                    runtime, previous = _load_recoverable_request(request["runtime"])
+                except ValueError as exc:
+                    status = HTTPStatus.CONFLICT if str(exc) == "Runtime 不可恢复" else HTTPStatus.UNPROCESSABLE_ENTITY
+                    return self._json({"error": str(exc)}, status)
                 # 复用下方 resume 流程所需的内存状态；源码快照会重新创建并由协议校验。
                 with run.lock:
                     if run.process is not None and run.process.poll() is None:
                         return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
-                    run.request, run.runtime = previous, str(root)
+                    run.request, run.runtime = previous, runtime
                 try:
                     prepared, snapshots = _prepared_request_with_snapshots(previous)
                 except (ValueError, AgentSpecError, GitSourceError) as exc:
                     return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                prepared = {**prepared, "studio_runtime": str(root), "resume": True}
                 try:
-                    process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                except OSError:
-                    if snapshots:
-                        snapshots.cleanup()
-                    raise
-                with run.lock:
-                    run.process, run.source_snapshots = process, snapshots
-                    run.status, run.returncode, run.logs = "running", None, []
-                    _run_state(str(root), "running", previous)
-                    threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+                    _start_experiment_process(
+                        run, prepared_request=prepared, source_snapshots=snapshots, runtime=runtime,
+                        original_request=previous, resume=True,
+                    )
+                except RuntimeError as exc:
+                    return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
                 return self._json(run_status(run), HTTPStatus.ACCEPTED)
             if path != "/api/run": return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             checked = preflight(request)
@@ -605,23 +642,14 @@ def handler_for(static_root: Path, run: StudioRun):
                 prepared, snapshots = _prepared_request_with_snapshots(request)
             except (ValueError, AgentSpecError, GitSourceError) as exc:
                 return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
-            with run.lock:
-                if run.process is not None and run.process.poll() is None:
-                    if snapshots:
-                        snapshots.cleanup()
-                    return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
-                runtime = _runtime_for(request)
-                prepared = {**prepared, "studio_runtime": runtime}
-                try:
-                    run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                except OSError:
-                    if snapshots:
-                        snapshots.cleanup()
-                    raise
-                run.source_snapshots, run.request = snapshots, request
-                run.status, run.runtime, run.console_url, run.returncode, run.logs = "running", runtime, None, None, []
-                _run_state(runtime, "running", request)
-                threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+            runtime = _runtime_for(request)
+            try:
+                _start_experiment_process(
+                    run, prepared_request=prepared, source_snapshots=snapshots, runtime=runtime,
+                    original_request=request, resume=False,
+                )
+            except RuntimeError as exc:
+                return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
             return self._json(run_status(run), HTTPStatus.ACCEPTED)
 
     return StudioHandler
