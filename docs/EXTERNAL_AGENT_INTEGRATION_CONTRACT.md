@@ -34,15 +34,16 @@ flowchart LR
 - `external-command` Adapter：在平台准备的 Worktree 中启动用户 Agent 命令；
 - 通用 JSONL Trace 协议：复用现有 `TraceCollector` 和校验器格式；
 - 轻量 Python Observer SDK：为原生 Python Agent 提供上下文管理器；
+- LangGraph Callback：在 `invoke/stream` 入口一次性接入，不修改节点与工具实现；
 - 一个原生 Python 外部 Agent 示例；
 - 同 Agent、同模型、同工具、仅 Prompt 不同的 v1/v2 对照实验。
 - 由 [Evaluation Metrics v2](EVALUATION_METRICS_V2.md) 定义的稳定性、效率与工具行为指标。
 
-### v1 不包含
+### v1.1 不包含
 
 - 公网或远程 Agent 上报；
 - 多租户、登录、鉴权和团队协作；
-- LangChain、LangGraph、AutoGen 等框架专用封装；
+- LangChain/AutoGen 的通用封装、自动 monkey-patch；
 - Agent 自报的测试结果或评分成为权威结果；
 - 新建第二套 Trace、Result 或 Store 数据模型。
 
@@ -213,7 +214,7 @@ Span 下的 `error` Event 也可以记录同名字段。字段只能使用上述
 - `error`：`error_type` 与最多 500 字符的脱敏错误摘要；
 - `agent.stop`：退出原因，例如 `model_completed` 或 `max_tool_calls`。
 
-## 6. Python SDK 目标接口
+## 6. Python SDK 接口
 
 接口名称在实现前通过测试固定，预期使用方式如下：
 
@@ -235,6 +236,21 @@ with observer.run():
 SDK 写入失败不得中断 Agent 主流程，但平台最终必须将缺失或不完整的 Trace 判为 `trace_incomplete`。这实现了“Agent 可继续执行、晋级证据必须 fail-closed”。
 
 SDK 必须对常规写入串行化，但 v1 不提供跨进程锁。`model_usage` 由 Adapter/平台从已校验的 `model.call` 结束事件聚合，不能从最终输出文件读取。Tool Integrity 只能验证已观测调用是否合规；未埋点调用的不可见性属于 v1 已知限制，因此官方示例和 Promotion 实验必须通过 SDK 包裹所有模型与工具调用。
+
+### 6.1 LangGraph 单点 Callback
+
+`observation.mode: langgraph` 使用平台固定的能力快照：层级 Trace、模型用量、工具 Trace 与 Workflow 可用；工具语义默认不可用。Agent 只需在一个启动点接入：
+
+```python
+from regression_lab_observer.langgraph import LangGraphObserver
+
+with LangGraphObserver.from_environment() as observation:
+    graph.invoke(inputs, config={"callbacks": [observation.callback]})
+```
+
+Callback 把 Node、LangChain 模型和 Tool 生命周期映射为 `workflow.*`、`model.call` 和 `tool.call`，并由 Callback Run ID 建立父子关系。它只记录模型名、Token、耗时、状态、节点名和工具名，不能记录 Prompt、响应正文、工具参数或输出正文。Callback 未正常完成时，即使外部进程退出成功，平台仍会把 Trial 标记为 `trace_incomplete`。
+
+这不是对任意 Python 调用的自动探针：没有经过 LangChain Model/Tool 或 SDK 的调用属于 `not_observed`。Result 会按字段标记 `platform_observed`、`framework_observed`、`sdk_self_reported` 或 `not_observed`，Gate 不会把未观测值当作零。
 
 ## 7. Result 与评测
 
