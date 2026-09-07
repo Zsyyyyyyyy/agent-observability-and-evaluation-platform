@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProtocolTests(unittest.TestCase):
+    def _comparison_agents(self) -> list[dict[str, str]]:
+        return [
+            {"id": "baseline", "version": "v1"},
+            {"id": "candidate", "version": "v2"},
+        ]
+
     def _manifest(self, root: Path) -> dict:
         fixture = root / "fixtures" / "case"; fixture.mkdir(parents=True)
         (fixture / "app.py").write_text("value = 1\n", encoding="utf-8")
@@ -33,8 +39,8 @@ class ProtocolTests(unittest.TestCase):
     def test_protocol_is_stable_and_never_persists_api_key(self):
         with TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_API_KEY": "secret-value", "AGENT_MODEL": "demo-model"}, clear=False):
             manifest = self._manifest(Path(directory))
-            first = build_protocol(manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}], adapter="external-command", external_command=["python", "missing-agent.py"], trials=3, use_docker=True, bash=False)
-            second = build_protocol(manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}], adapter="external-command", external_command=["python", "missing-agent.py"], trials=3, use_docker=True, bash=False)
+            first = build_protocol(manifests=[manifest], agents=self._comparison_agents(), adapter="external-command", external_command=["python", "missing-agent.py"], trials=3, use_docker=True, bash=False)
+            second = build_protocol(manifests=[manifest], agents=self._comparison_agents(), adapter="external-command", external_command=["python", "missing-agent.py"], trials=3, use_docker=True, bash=False)
         self.assertEqual(first["protocol_fingerprint"], second["protocol_fingerprint"])
         self.assertEqual(first["protocol_fingerprint"], protocol_fingerprint(first))
         self.assertNotIn("secret-value", json.dumps(first))
@@ -45,7 +51,7 @@ class ProtocolTests(unittest.TestCase):
             manifest["version"] = 1
             manifest["execution"]["timeout_seconds"] = 180
             protocol = build_protocol(
-                manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                manifests=[manifest], agents=self._comparison_agents(),
                 adapter="external-command", external_command=None, trials=1, use_docker=True, bash=False,
             )
             # 后续 Case 更新属于新实验口径，不能追溯改写已冻结 Runtime 的 Protocol。
@@ -60,15 +66,15 @@ class ProtocolTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             manifest = self._manifest(Path(directory))
             with mock.patch.dict(os.environ, {"AGENT_MODEL": "model-a"}, clear=False):
-                before = build_protocol(manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}], adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
+                before = build_protocol(manifests=[manifest], agents=self._comparison_agents(), adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
             with mock.patch.dict(os.environ, {"AGENT_MODEL": "model-b"}, clear=False):
-                after = build_protocol(manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}], adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
+                after = build_protocol(manifests=[manifest], agents=self._comparison_agents(), adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
         self.assertEqual(compare_protocols(before, after), {"level": "not_comparable", "differences": ["model"]})
 
     def test_protocol_marks_intervention_definition_change_not_comparable(self):
         with TemporaryDirectory() as directory:
             manifest = self._manifest(Path(directory))
-            common = dict(manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}], adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
+            common = dict(manifests=[manifest], agents=self._comparison_agents(), adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
             before = build_protocol(**common, comparison_intent="prompt_profile_only")
             after = build_protocol(**common, comparison_intent="runtime_policy", allowed_differences=("agents[].runtime_policy",))
         self.assertEqual(compare_protocols(before, after), {"level": "not_comparable", "differences": ["comparison_intent", "allowed_differences"]})
@@ -77,7 +83,7 @@ class ProtocolTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             manifest = self._manifest(Path(directory))
             common = dict(
-                manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                manifests=[manifest], agents=self._comparison_agents(),
                 adapter="external-command", external_command=["python", "agent.py"], trials=3, use_docker=True, bash=False,
             )
             declared = {
@@ -100,7 +106,7 @@ class ProtocolTests(unittest.TestCase):
                 "source_scope": "entrypoint_only",
             }
             protocol = build_protocol(
-                manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                manifests=[manifest], agents=self._comparison_agents(),
                 adapter="external-command", external_command=None, trials=3, use_docker=True, bash=False,
                 agent_snapshots={"baseline": snapshot},
             )
@@ -114,7 +120,7 @@ class ProtocolTests(unittest.TestCase):
             "tool_trace": True, "tool_semantics": True, "test_trace": False, "context_trace": False,
             "workflow_trace": False, "mcp_trace": False,
         }
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
         configs = parse_external_arm_configs(json.dumps({
             "baseline": {"external_command": ["python", "baseline.py"], "adapter_capabilities": capabilities, "observation_mode": "sdk"},
             "candidate": {"external_command": ["python", "candidate.py"], "adapter_capabilities": capabilities, "observation_mode": "sdk"},
@@ -157,7 +163,7 @@ class ProtocolTests(unittest.TestCase):
             )
             protocol_state = _freeze_or_restore_protocol(
                 args,
-                agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                agents=self._comparison_agents(),
                 manifests=[(Path(manifest["_manifest_path"]), manifest)], jobs=[{"trial_index": 1}],
                 output_dir=root / "runtime", external_command=[sys.executable, str(ROOT / "examples" / "external_blackbox_agent.py")],
                 external_arm_configs=None, adapter_capabilities=None, use_docker=False,
@@ -172,11 +178,11 @@ class ProtocolTests(unittest.TestCase):
         with TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_TEMPERATURE": "not-a-number"}, clear=False):
             manifest = self._manifest(Path(directory))
             with self.assertRaisesRegex(ValueError, "AGENT_TEMPERATURE"):
-                build_protocol(manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}], adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
+                build_protocol(manifests=[manifest], agents=self._comparison_agents(), adapter="react-agent", external_command=None, trials=3, use_docker=True, bash=False)
 
     def test_attempt_source_hash_mismatch_is_not_comparable(self):
         protocol = {"agents": [{"label": "candidate", "agent_source_hash": "sha256:frozen"}]}
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
         summaries = {"baseline": {"jobs": [{}]}, "candidate": {"jobs": [{"job_id": "case_trial_001", "agent_source_hash": "sha256:changed"}]}}
         self.assertEqual(
             _attempt_source_comparability(protocol, agents, summaries),
@@ -185,13 +191,13 @@ class ProtocolTests(unittest.TestCase):
 
     def test_attempt_source_hash_match_keeps_strict_comparability(self):
         protocol = {"agents": [{"label": "candidate", "agent_source_hash": "sha256:frozen"}]}
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
         summaries = {"baseline": {"jobs": [{}]}, "candidate": {"jobs": [{"job_id": "case_trial_001", "agent_source_hash": "sha256:frozen"}]}}
         self.assertEqual(_attempt_source_comparability(protocol, agents, summaries), {"level": "strict", "differences": []})
 
     def test_execution_plan_is_paired_interleaved_and_repeatable(self):
         jobs = [{"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"}, {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"}]
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
         first = build_execution_plan(jobs, agents, seed=7)
         self.assertEqual(first, build_execution_plan(jobs, agents, seed=7))
         self.assertEqual([item["agent_label"] for item in first["entries"]].count("baseline"), 2)
@@ -212,7 +218,7 @@ class ProtocolTests(unittest.TestCase):
             {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
             {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
         ]
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
 
         plan = build_execution_plan(jobs, agents, seed=7, concurrency=2)
 
@@ -229,7 +235,7 @@ class ProtocolTests(unittest.TestCase):
             {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
             {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
         ]
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
         plan = build_execution_plan(jobs, agents, seed=7, concurrency=2)
         events: list[tuple[str, str, str, float]] = []
         lock = threading.Lock()
@@ -269,7 +275,7 @@ class ProtocolTests(unittest.TestCase):
             {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
             {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
         ]
-        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        agents = self._comparison_agents()
         plan = build_execution_plan(jobs, agents, seed=7, concurrency=2)
         calls: list[tuple[str, str]] = []
 

@@ -11,6 +11,32 @@ from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _prepared_r
 
 
 class RunStudioTests(unittest.TestCase):
+    def _write_agent_spec(
+        self,
+        path: Path,
+        *,
+        version: str,
+        project_id: str = "studio-fixture",
+        agent_id: str = "studio-agent",
+        observation_mode: str = "blackbox",
+    ) -> Path:
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "project_id": project_id,
+            "agent": {"id": agent_id, "version": version},
+            "runtime": {"command": [sys.executable]},
+            "observation": {"mode": observation_mode},
+        }), encoding="utf-8")
+        return path
+
+    def _initialize_git_repository(self, root: Path) -> None:
+        for arguments in (
+            ("init",),
+            ("config", "user.email", "test@example.invalid"),
+            ("config", "user.name", "Studio Test"),
+        ):
+            subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+
     def _request(self, baseline: Path, candidate: Path, **overrides):
         request = {
             "baseline": str(baseline), "candidate": str(candidate), "benchmarks": ["smoke-case-design.yaml"],
@@ -23,10 +49,7 @@ class RunStudioTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
             for path, version in ((baseline, "v1"), (candidate, "v2")):
-                path.write_text(json.dumps({
-                    "schema_version": 1, "project_id": "studio-fixture", "agent": {"id": "studio-agent", "version": version},
-                    "runtime": {"command": [sys.executable]}, "observation": {"mode": "blackbox"},
-                }), encoding="utf-8")
+                self._write_agent_spec(path, version=version)
             result = preflight(self._request(baseline, candidate))
 
         self.assertTrue(result["valid"])
@@ -37,10 +60,7 @@ class RunStudioTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
             for path, version in ((baseline, "v1"), (candidate, "v2")):
-                path.write_text(json.dumps({
-                    "schema_version": 1, "project_id": "studio-fixture", "agent": {"id": "studio-agent", "version": version},
-                    "runtime": {"command": [sys.executable]}, "observation": {"mode": "blackbox"},
-                }), encoding="utf-8")
+                self._write_agent_spec(path, version=version)
             request = self._request(baseline, candidate, concurrency=2)
             result = preflight(request)
             command = command_for(request)
@@ -65,10 +85,7 @@ class RunStudioTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
             for path, version in ((baseline, "v1"), (candidate, "v2")):
-                path.write_text(json.dumps({
-                    "schema_version": 1, "project_id": "studio-fixture", "agent": {"id": "studio-agent", "version": version},
-                    "runtime": {"command": [sys.executable]}, "observation": {"mode": "blackbox"},
-                }), encoding="utf-8")
+                self._write_agent_spec(path, version=version)
             fast = preflight(self._request(
                 baseline, candidate, benchmarks=["normalize-case-design.yaml"], trials=1, evaluation_mode="fast",
             ))
@@ -92,10 +109,7 @@ class RunStudioTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
             for path, version in ((baseline, "v1"), (candidate, "v2")):
-                path.write_text(json.dumps({
-                    "schema_version": 1, "project_id": "studio-fixture", "agent": {"id": "studio-agent", "version": version},
-                    "runtime": {"command": [sys.executable]}, "observation": {"mode": "blackbox"},
-                }), encoding="utf-8")
+                self._write_agent_spec(path, version=version)
             result = preflight(self._request(
                 baseline, candidate, benchmarks=["safe-slug-case.yaml"], trials=1, evaluation_mode="fast",
             ))
@@ -148,8 +162,7 @@ class RunStudioTests(unittest.TestCase):
     def test_git_quick_setup_freezes_a_dirty_candidate_without_touching_repository(self):
         with TemporaryDirectory() as directory:
             repository = Path(directory)
-            for arguments in (("init",), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Studio Test")):
-                subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+            self._initialize_git_repository(repository)
             (repository / "agent.py").write_text("VERSION = 'baseline'\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=repository, check=True, capture_output=True)
             subprocess.run(["git", "commit", "-m", "baseline"], cwd=repository, check=True, capture_output=True)
@@ -183,8 +196,7 @@ class RunStudioTests(unittest.TestCase):
     def test_git_quick_setup_runs_an_experiment_from_frozen_sources(self):
         with TemporaryDirectory() as directory, TemporaryDirectory() as runtime_directory:
             repository = Path(directory)
-            for arguments in (("init",), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Studio Test")):
-                subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+            self._initialize_git_repository(repository)
             agent = repository / "agent.py"
             agent.write_text(
                 "import argparse\nfrom pathlib import Path\n"
