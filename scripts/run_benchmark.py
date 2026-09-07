@@ -110,6 +110,12 @@ def _timed_out_result(job: dict[str, object], timeout_seconds: int) -> dict[str,
     }
 
 
+def _observed_metric(value: object) -> int | float | None:
+    """保留已观测的零值，同时让缺失指标保持不可用。"""
+
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _is_reusable_result(result: dict[str, object]) -> bool:
     trace_valid = (result.get("trace_validation") or {}).get("valid") is True
     evaluation_passed = (result.get("evaluation") or {}).get("passed") is True
@@ -590,8 +596,8 @@ def _job_summary(job: dict[str, object], result: dict[str, object]) -> dict[str,
     capabilities = AdapterCapabilities.from_snapshot(result.get("adapter_capabilities"))
     behavior = result.get("behavior") if isinstance(result.get("behavior"), dict) else summarize_trial_behavior(result)
     # 外部 black-box 仍会有平台生命周期 Trace，但这不能伪装成工具或模型证据。
-    tool_calls = scores.get("tool_integrity", {}).get("actual", {}).get("tool_calls", 0)
-    model_tokens = result.get("model_usage", {}).get("total_tokens", 0)
+    tool_calls = _observed_metric(scores.get("tool_integrity", {}).get("actual", {}).get("tool_calls"))
+    model_tokens = _observed_metric(result.get("model_usage", {}).get("total_tokens"))
     if capabilities is not None and not capabilities.tool_trace:
         tool_calls = None
     if capabilities is not None and not capabilities.model_usage:
@@ -609,9 +615,9 @@ def _job_summary(job: dict[str, object], result: dict[str, object]) -> dict[str,
         # DiffEvaluator 的其他违规仍保留策略含义，并计入 Gate 比率。
         "diff_policy_violated": actual_diff_policy_violation,
         "tool_calls": tool_calls,
-        "duration_ms": scores.get("budget", {}).get("actual", {}).get("duration_ms", 0),
-        "added_lines": scores.get("diff", {}).get("actual", {}).get("added_lines", 0),
-        "deleted_lines": scores.get("diff", {}).get("actual", {}).get("deleted_lines", 0),
+        "duration_ms": _observed_metric(scores.get("budget", {}).get("actual", {}).get("duration_ms")),
+        "added_lines": _observed_metric(scores.get("diff", {}).get("actual", {}).get("added_lines")),
+        "deleted_lines": _observed_metric(scores.get("diff", {}).get("actual", {}).get("deleted_lines")),
         "model_tokens": model_tokens,
         "adapter_id": result.get("adapter_id"),
         "adapter_capabilities": result.get("adapter_capabilities"),

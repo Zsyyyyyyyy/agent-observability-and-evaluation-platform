@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import unittest
 from argparse import Namespace
 from unittest import mock
@@ -9,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from regression_lab.protocol import build_execution_plan, build_protocol, compare_protocols, protocol_fingerprint
-from scripts.run_experiment import _attempt_source_comparability, _freeze_or_restore_protocol, describe_prompt_profiles, parse_external_arm_configs
+from scripts.run_experiment import _attempt_source_comparability, _freeze_or_restore_protocol, _run_execution_plan, describe_prompt_profiles, parse_external_arm_configs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +38,23 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(first["protocol_fingerprint"], second["protocol_fingerprint"])
         self.assertEqual(first["protocol_fingerprint"], protocol_fingerprint(first))
         self.assertNotIn("secret-value", json.dumps(first))
+
+    def test_frozen_protocol_keeps_the_original_case_timeout(self):
+        with TemporaryDirectory() as directory:
+            manifest = self._manifest(Path(directory))
+            manifest["version"] = 1
+            manifest["execution"]["timeout_seconds"] = 180
+            protocol = build_protocol(
+                manifests=[manifest], agents=[{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}],
+                adapter="external-command", external_command=None, trials=1, use_docker=True, bash=False,
+            )
+            # 后续 Case 更新属于新实验口径，不能追溯改写已冻结 Runtime 的 Protocol。
+            manifest["version"] = 2
+            manifest["execution"]["timeout_seconds"] = 90
+
+        snapshot = protocol["benchmark"]["cases"][0]
+        self.assertEqual(snapshot["budget"]["timeout_seconds"], 180)
+        self.assertEqual(snapshot["case_id"], "case")
 
     def test_protocol_marks_model_change_not_comparable(self):
         with TemporaryDirectory() as directory:
@@ -187,6 +206,118 @@ class ProtocolTests(unittest.TestCase):
         for trial_index in range(1, 4):
             labels = [entry["agent_label"] for entry in plan["entries"] if entry["trial_index"] == trial_index]
             self.assertEqual(set(labels), {"champion", "positive", "negative"})
+
+    def test_execution_plan_freezes_pair_identity_order_and_concurrency(self):
+        jobs = [
+            {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
+            {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
+        ]
+        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+
+        plan = build_execution_plan(jobs, agents, seed=7, concurrency=2)
+
+        self.assertEqual(plan["concurrency"], 2)
+        self.assertEqual(plan["scheduling_policy"], "paired_baseline_then_candidate")
+        self.assertEqual(len(plan["pairs"]), 2)
+        for pair in plan["pairs"]:
+            self.assertEqual(pair["agent_order"], ["baseline", "candidate"])
+            entries = [entry for entry in plan["entries"] if entry["pair_id"] == pair["pair_id"]]
+            self.assertEqual([entry["agent_label"] for entry in entries], ["baseline", "candidate"])
+
+    def test_pair_scheduler_runs_pairs_in_parallel_but_versions_in_order(self):
+        jobs = [
+            {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
+            {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
+        ]
+        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        plan = build_execution_plan(jobs, agents, seed=7, concurrency=2)
+        events: list[tuple[str, str, str, float]] = []
+        lock = threading.Lock()
+        baseline_barrier = threading.Barrier(2)
+
+        def fake_run(command, **_kwargs):
+            version = command[command.index("--agent-version") + 1]
+            case_id = Path(command[command.index("--output-dir") + 1]).name
+            with lock:
+                events.append((version, case_id, "start", time.monotonic()))
+            if version == "v1":
+                baseline_barrier.wait(timeout=2)
+                time.sleep(0.02)
+            with lock:
+                events.append((version, case_id, "end", time.monotonic()))
+            return Namespace(returncode=0, stdout="", stderr="")
+
+        args = Namespace(adapter="react-agent", trials=1, replay_source=None, bash=False, resume=False)
+        protocol = {"protocol_fingerprint": "sha256:test", "agents": []}
+        with TemporaryDirectory() as directory, mock.patch("scripts.run_experiment.subprocess.run", side_effect=fake_run):
+            returncode = _run_execution_plan(
+                plan, agents=agents, manifests_by_id={"a": (Path("a.yaml"), {"id": "a"}), "b": (Path("b.yaml"), {"id": "b"})},
+                output_dir=Path(directory), protocol=protocol, args=args, external_command=None,
+                external_arm_configs=None, adapter_capabilities=None, use_docker=False,
+            )
+
+        self.assertEqual(returncode, 0)
+        starts = {(version, case_id): stamp for version, case_id, event, stamp in events if event == "start"}
+        ends = {(version, case_id): stamp for version, case_id, event, stamp in events if event == "end"}
+        self.assertLess(starts[("v1", "a")], starts[("v2", "a")])
+        self.assertLess(starts[("v1", "b")], starts[("v2", "b")])
+        self.assertLess(starts[("v1", "a")], ends[("v1", "b")])
+        self.assertLess(starts[("v1", "b")], ends[("v1", "a")])
+
+    def test_pair_scheduler_isolates_infrastructure_failure_to_its_pair(self):
+        jobs = [
+            {"case_id": "a", "trial_index": 1, "job_id": "a_trial_001"},
+            {"case_id": "b", "trial_index": 1, "job_id": "b_trial_001"},
+        ]
+        agents = [{"id": "baseline", "version": "v1"}, {"id": "candidate", "version": "v2"}]
+        plan = build_execution_plan(jobs, agents, seed=7, concurrency=2)
+        calls: list[tuple[str, str]] = []
+
+        def fake_run(command, **_kwargs):
+            version = command[command.index("--agent-version") + 1]
+            case_id = Path(command[command.index("--output-dir") + 1]).name
+            calls.append((version, case_id))
+            return Namespace(returncode=2 if (version, case_id) == ("v1", "a") else 0, stdout="", stderr="")
+
+        args = Namespace(adapter="react-agent", trials=1, replay_source=None, bash=False, resume=True)
+        protocol = {"protocol_fingerprint": "sha256:test", "agents": []}
+        with TemporaryDirectory() as directory, mock.patch("scripts.run_experiment.subprocess.run", side_effect=fake_run):
+            returncode = _run_execution_plan(
+                plan, agents=agents, manifests_by_id={"a": (Path("a.yaml"), {"id": "a"}), "b": (Path("b.yaml"), {"id": "b"})},
+                output_dir=Path(directory), protocol=protocol, args=args, external_command=None,
+                external_arm_configs=None, adapter_capabilities=None, use_docker=False,
+            )
+
+        self.assertEqual(returncode, 2)
+        self.assertIn(("v1", "b"), calls)
+        self.assertIn(("v2", "b"), calls)
+        self.assertNotIn(("v2", "a"), calls)
+
+    def test_concurrent_resume_reuses_completed_trial_artifacts(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            command = [
+                sys.executable, "scripts/run_experiment.py", "--adapter", "failure-probe",
+                "--agents", "baseline:failure-probe-v1,candidate:failure-probe-v2", "--trials", "1",
+                "--concurrency", "2", "--unsafe-trusted-host", "--output-dir", str(output), "--resume",
+                "--manifest", "benchmarks/failure-path-violation.yaml",
+                "--manifest", "benchmarks/failure-unauthorized-tool.yaml",
+            ]
+            first = subprocess.run(command, cwd=ROOT, env={**os.environ, "PYTHONPATH": "src:."}, text=True, capture_output=True, check=False)
+            before = {
+                path.parent.relative_to(output).as_posix(): sorted(item.name for item in (path.parent / "attempts").iterdir())
+                for path in output.rglob("selected-attempt.json")
+            }
+            resumed = subprocess.run(command, cwd=ROOT, env={**os.environ, "PYTHONPATH": "src:."}, text=True, capture_output=True, check=False)
+            after = {
+                path.parent.relative_to(output).as_posix(): sorted(item.name for item in (path.parent / "attempts").iterdir())
+                for path in output.rglob("selected-attempt.json")
+            }
+
+        self.assertEqual(first.returncode, 1, first.stderr)
+        self.assertEqual(resumed.returncode, 1, resumed.stderr)
+        self.assertEqual(before, after)
+        self.assertTrue(before)
 
     def test_experiment_refuses_resume_when_protocol_changes(self):
         with TemporaryDirectory() as directory:

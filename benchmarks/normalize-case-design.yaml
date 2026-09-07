@@ -1,8 +1,10 @@
 schema_version: 1
 status: ready
+studio:
+  presets: [fast, standard]
 
 id: normalize_none_input
-version: 1
+version: 2
 title: 处理名称标准化的空输入
 description: >-
   验证 Agent 能否补充输入校验，同时保持已有字符串标准化行为。
@@ -26,7 +28,7 @@ task:
     - tests/**
 
 execution:
-  timeout_seconds: 180
+  timeout_seconds: 90
   max_tokens: 30000
   max_tool_calls: 24
   max_retries: 2

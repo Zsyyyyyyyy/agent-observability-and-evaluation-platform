@@ -77,6 +77,8 @@ def _metrics(summary: dict[str, Any]) -> dict[str, float | None]:
     durations = _numbers(jobs, "duration_ms")
     tokens = _numbers(jobs, "model_tokens")
     tool_calls = _numbers(jobs, "tool_calls")
+    added_lines = _numbers(jobs, "added_lines")
+    deleted_lines = _numbers(jobs, "deleted_lines")
     return {
         "trial_count": float(len(jobs)),
         "completion_rate": completed / count,
@@ -89,9 +91,9 @@ def _metrics(summary: dict[str, Any]) -> dict[str, float | None]:
         "path_policy_violation_rate": path_violations / count,
         "diff_policy_violation_rate": diff_violations / count,
         "avg_tool_calls": mean(tool_calls) if tool_calls else None,
-        "avg_duration_ms": mean(durations) if durations else 0.0,
-        "avg_added_lines": mean(_numbers(jobs, "added_lines")) if _numbers(jobs, "added_lines") else 0.0,
-        "avg_deleted_lines": mean(_numbers(jobs, "deleted_lines")) if _numbers(jobs, "deleted_lines") else 0.0,
+        "avg_duration_ms": mean(durations) if durations else None,
+        "avg_added_lines": mean(added_lines) if added_lines else None,
+        "avg_deleted_lines": mean(deleted_lines) if deleted_lines else None,
         "avg_model_tokens": mean(tokens) if tokens else None,
         "p50_duration_ms": median(durations) if durations else None,
         "p95_duration_ms": _nearest_rank(durations, 0.95),

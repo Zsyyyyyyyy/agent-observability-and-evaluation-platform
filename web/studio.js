@@ -10,8 +10,10 @@ const resumeRunButton = document.querySelector("#resume-run");
 const savedSetupStatus = document.querySelector("#saved-setup-status");
 const restoreSetupButton = document.querySelector("#restore-setup");
 const forgetSetupButton = document.querySelector("#forget-setup");
-const LOCAL_SETUP_KEY = "regression-lab.studio.local-setup.v2";
+const LOCAL_SETUP_KEY = "regression-lab.studio.local-setup.v3";
 let preflightValid = false;
+let catalog = null;
+let applyingPreset = false;
 
 function values() {
   const data = new FormData(form);
@@ -22,12 +24,12 @@ function values() {
     baseline_version: data.get("baseline_version")?.trim(), candidate_version: data.get("candidate_version")?.trim(),
     source_mode: data.get("source_mode") || "two_entries", repository_path: data.get("repository_path")?.trim(), baseline_ref: data.get("baseline_ref")?.trim(), candidate_source: data.get("candidate_source") || "working_tree", candidate_ref: data.get("candidate_ref")?.trim(),
     baseline_python_executable: data.get("baseline_python_executable")?.trim(), candidate_python_executable: data.get("candidate_python_executable")?.trim(), launch_target_kind: data.get("launch_target_kind"), baseline_entrypoint: data.get("baseline_entrypoint")?.trim(), candidate_entrypoint: data.get("candidate_entrypoint")?.trim(), observation_mode: data.get("observation_mode"),
-    benchmarks: [...data.getAll("benchmarks")], trials: Number(data.get("trials")), execution_mode: data.get("execution_mode"), trusted_host_confirmed: data.get("trusted_host_confirmed") === "on",
+    benchmarks: [...data.getAll("benchmarks")], trials: Number(data.get("trials")), concurrency: Number(data.get("concurrency") || 1), evaluation_mode: data.get("evaluation_mode") || "custom", execution_mode: data.get("execution_mode"), trusted_host_confirmed: data.get("trusted_host_confirmed") === "on",
   };
 }
 function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value); return node.innerHTML; }
 function readSavedSetup() {
-  try { return JSON.parse(localStorage.getItem(LOCAL_SETUP_KEY) || localStorage.getItem("regression-lab.studio.local-setup.v1")); }
+  try { return JSON.parse(localStorage.getItem(LOCAL_SETUP_KEY) || localStorage.getItem("regression-lab.studio.local-setup.v2") || localStorage.getItem("regression-lab.studio.local-setup.v1")); }
   catch { return null; }
 }
 function updateSavedSetupStatus(message) {
@@ -40,14 +42,17 @@ function applySavedSetup(saved) {
   const setupMode = document.querySelector(`input[name=setup_mode][value="${CSS.escape(saved.launch_mode || "quick")}"]`);
   if (setupMode) setupMode.checked = true;
   if (saved.source_mode === undefined) form.elements.namedItem("source_mode").value = "two_entries";
-  const simpleFields = ["baseline", "candidate", "project_id", "agent_id", "source_mode", "repository_path", "baseline_ref", "candidate_source", "candidate_ref", "baseline_version", "candidate_version", "baseline_python_executable", "candidate_python_executable", "launch_target_kind", "baseline_entrypoint", "candidate_entrypoint", "observation_mode", "trials"];
+  const simpleFields = ["baseline", "candidate", "project_id", "agent_id", "source_mode", "repository_path", "baseline_ref", "candidate_source", "candidate_ref", "baseline_version", "candidate_version", "baseline_python_executable", "candidate_python_executable", "launch_target_kind", "baseline_entrypoint", "candidate_entrypoint", "observation_mode", "trials", "concurrency"];
   simpleFields.forEach(name => { const control = form.elements.namedItem(name); if (control && saved[name] !== undefined) control.value = saved[name]; });
   const executionMode = document.querySelector(`input[name=execution_mode][value="${CSS.escape(saved.execution_mode || "docker")}"]`);
   if (executionMode) executionMode.checked = true;
   const selectedBenchmarks = new Set(Array.isArray(saved.benchmarks) ? saved.benchmarks : []);
   document.querySelectorAll("input[name=benchmarks]").forEach(input => { input.checked = selectedBenchmarks.has(input.value); });
+  const mode = saved.evaluation_mode || "custom";
+  const modeInput = document.querySelector(`input[name=evaluation_mode][value="${CSS.escape(mode)}"]`);
+  if (modeInput) modeInput.checked = true;
   form.elements.namedItem("trusted_host_confirmed").checked = false;
-  setSetupMode(); syncSourceMode(); syncExecutionMode(); preflightValid = false; launchButton.disabled = true;
+  setSetupMode(); syncSourceMode(); syncExecutionMode(); renderEvaluationMode(); preflightValid = false; launchButton.disabled = true;
 }
 function saveLocalSetup() {
   const setup = values();
@@ -57,7 +62,8 @@ function saveLocalSetup() {
 }
 function restoreLocalSetup(message = true) {
   const saved = readSavedSetup();
-  if (saved) { applySavedSetup(saved); updateSavedSetupStatus(message ? "Restored from this browser" : undefined); }
+  if (saved) { applySavedSetup(saved); updateSavedSetupStatus(message ? "Restored from this browser" : undefined); return true; }
+  return false;
 }
 function forgetLocalSetup() {
   try { localStorage.removeItem(LOCAL_SETUP_KEY); } catch {}
@@ -72,8 +78,14 @@ function renderPreflight(result) {
   const gitIdentity = gitSources
     ? `<p>Git evidence · Baseline <code>${escapeHtml(gitSources.baseline_revision)}</code> · Candidate <code>${escapeHtml(gitSources.candidate_revision)}</code>${gitSources.candidate_dirty ? ` · working tree changed (${gitSources.tracked_changes} tracked, ${gitSources.untracked_changes} untracked)` : " · clean commit/tag"}</p>`
     : "";
+  const mode = configuration?.evaluation_mode;
+  const semantics = {diagnostic_only: "DIAGNOSTIC ONLY", comparison_only: "COMPARISON ONLY", promotion_eligible: "PROMOTION ELIGIBLE", configuration_dependent: "CUSTOM CONFIGURATION"};
+  const duration = configuration?.maximum_duration_seconds;
+  const durationText = typeof duration === "number" ? `${Math.floor(duration / 60)}m${duration % 60 ? ` ${duration % 60}s` : ""}` : "N/A";
+  const cases = (configuration?.cases || []).map(item => `<li>${escapeHtml(item.id)} · hard timeout ${escapeHtml(item.timeout_seconds)}s</li>`).join("");
   preflightResult.className = `preflight-result ${preflightValid ? "valid" : "invalid"}`;
-  preflightResult.innerHTML = configuration ? `<strong>Ready · ${escapeHtml(configuration.agent_id)} ${escapeHtml(configuration.baseline_version)} → ${escapeHtml(configuration.candidate_version)}</strong><p>${configuration.benchmark_count} Cases × ${configuration.trial_count / configuration.benchmark_count / 2} repeats × 2 versions = ${configuration.trial_count} Trials</p>${gitIdentity}${warnings ? `<ul>${warnings}</ul>` : ""}` : `<strong>Not ready</strong>${errors ? `<ul>${errors}</ul>` : ""}${warnings ? `<ul>${warnings}</ul>` : ""}`;
+  const concurrency = configuration?.pair_concurrency || 1;
+  preflightResult.innerHTML = configuration ? `<strong>Ready · ${escapeHtml(configuration.agent_id)} ${escapeHtml(configuration.baseline_version)} → ${escapeHtml(configuration.candidate_version)}</strong><p class="preflight-mode">${escapeHtml(String(mode || "custom").toUpperCase())} · ${escapeHtml(semantics[configuration.gate_semantics] || "CUSTOM CONFIGURATION")}</p><p>${configuration.case_count} Cases × ${configuration.repeat_count} repeats × ${configuration.version_count} versions = ${configuration.trial_count} Trials</p><p>Execution: up to ${escapeHtml(concurrency)} independent Pair${concurrency === 1 ? "" : "s"}; each Pair runs baseline → candidate.</p><p>Hard-timeout upper bound: ${durationText}.</p><p>Each Trial is terminated at its Case timeout. Completed Trials are then evaluated against duration, token and tool-call budgets.</p>${cases ? `<p>Cases</p><ul>${cases}</ul>` : ""}${gitIdentity}${warnings ? `<ul>${warnings}</ul>` : ""}` : `<strong>Not ready</strong>${errors ? `<ul>${errors}</ul>` : ""}${warnings ? `<ul>${warnings}</ul>` : ""}`;
 }
 async function request(url, options) { const response = await fetch(url, options); const data = await response.json(); if (!response.ok && !data.errors) data.errors = [data.error || "请求失败"]; return data; }
 async function validate() { const result = await request("/api/preflight", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(values())}); renderPreflight(result); return result; }
@@ -91,9 +103,18 @@ async function loadRecoveries() { const response=await request("/api/recoveries"
 cancelRunButton.addEventListener("click", async () => { renderRun(await request("/api/run/cancel", {method: "POST"})); refreshRun(); });
 resumeRunButton.addEventListener("click", async () => { renderRun(await request("/api/run/resume", {method: "POST"})); refreshRun(); });
 document.querySelector("#preflight-button").addEventListener("click", event => { event.preventDefault(); validate(); });
-form.addEventListener("change", () => { preflightValid = false; launchButton.disabled = true; });
+form.addEventListener("change", event => {
+  if (!applyingPreset && (event.target.name === "benchmarks" || event.target.name === "trials")) setEvaluationMode("custom");
+  preflightValid = false; launchButton.disabled = true;
+});
 form.addEventListener("submit", event => { event.preventDefault(); validate(); });
-function syncExecutionMode() { document.querySelector("#trusted-confirmation").hidden = document.querySelector("input[name=execution_mode]:checked").value !== "trusted_host"; }
+function syncExecutionMode() {
+  const confirmation = document.querySelector("#trusted-confirmation");
+  const trustedHost = document.querySelector("input[name=execution_mode]:checked").value === "trusted_host";
+  confirmation.hidden = !trustedHost;
+  // Docker 不需要主机执行授权，切回后清空，避免旧选择被误带入预检请求。
+  if (!trustedHost) confirmation.querySelector("input").checked = false;
+}
 function syncObservationMode() {
   const mode = form.elements.namedItem("observation_mode").value;
   const note = document.querySelector("#observation-note");
@@ -112,6 +133,44 @@ function syncSourceMode() {
   document.querySelectorAll("input[name=repository_path], input[name=baseline_ref], select[name=candidate_source], input[name=candidate_ref]").forEach(input => { input.disabled = !gitMode || !quick; });
   document.querySelectorAll("input[name$=entrypoint]").forEach(input => { input.placeholder = module ? "my_agent" : gitMode ? "path/to/agent.py" : "/absolute/path/to/agent.py"; });
 }
+function selectedMode() { return document.querySelector("input[name=evaluation_mode]:checked")?.value || "custom"; }
+function presetCases(mode) { return (catalog?.benchmarks || []).filter(item => item.presets?.includes(mode)); }
+function renderEvaluationMode() {
+  const mode = selectedMode();
+  const descriptions = {
+    fast: "Fast · Quick check — 1 recommended Case × 1 repeat × 2 versions. Validates setup, execution and evidence collection. Diagnostic only — cannot promote a version.",
+    standard: "Standard · Version comparison — 3 recommended Cases × 1 repeat × 2 versions. Compares versions but cannot promote a version.",
+    strict: "Strict · Release evaluation — keeps your selected Cases and runs 3 repeats. Promotion eligibility still depends on Gate evidence and coverage.",
+    custom: "Custom — uses the selected Cases and repeat count. Gate semantics are determined from the final configuration.",
+  };
+  document.querySelector("#mode-description").textContent = descriptions[mode] || descriptions.custom;
+  document.querySelectorAll(".mode-options label").forEach(label => label.classList.toggle("active", label.querySelector("input").checked));
+}
+function setEvaluationMode(mode) {
+  const input = document.querySelector(`input[name=evaluation_mode][value="${CSS.escape(mode)}"]`);
+  if (!input) return;
+  input.checked = true;
+  renderEvaluationMode();
+}
+function applyEvaluationMode(mode) {
+  applyingPreset = true;
+  try {
+    if (mode === "fast" || mode === "standard") {
+      const selected = new Set(presetCases(mode).map(item => item.id));
+      document.querySelectorAll("input[name=benchmarks]").forEach(input => { input.checked = selected.has(input.value); });
+      form.elements.namedItem("trials").value = "1";
+    } else if (mode === "strict") {
+      if (!document.querySelector("input[name=benchmarks]:checked")) {
+        const selected = new Set(presetCases("standard").map(item => item.id));
+        document.querySelectorAll("input[name=benchmarks]").forEach(input => { input.checked = selected.has(input.value); });
+      }
+      form.elements.namedItem("trials").value = "3";
+    }
+    setEvaluationMode(mode);
+  } finally { applyingPreset = false; }
+  preflightValid = false; launchButton.disabled = true;
+}
+document.querySelectorAll("input[name=evaluation_mode]").forEach(input => input.addEventListener("change", event => applyEvaluationMode(event.target.value)));
 document.querySelectorAll("input[name=execution_mode]").forEach(input => input.addEventListener("change", syncExecutionMode));
 form.elements.namedItem("observation_mode").addEventListener("change", syncObservationMode);
 form.elements.namedItem("source_mode").addEventListener("change", syncSourceMode);
@@ -134,7 +193,15 @@ launchButton.addEventListener("click", async () => { const result = await reques
 document.querySelector("#save-setup").addEventListener("click", saveLocalSetup);
 restoreSetupButton.addEventListener("click", () => restoreLocalSetup());
 forgetSetupButton.addEventListener("click", forgetLocalSetup);
-request("/api/catalog").then(catalog => { document.querySelector("#case-count").textContent = `${catalog.benchmarks.length} available`; document.querySelectorAll("input[name$=python_executable]").forEach(input => { input.value = catalog.python_executable; }); benchmarkList.innerHTML = catalog.benchmarks.map((item, index) => `<label class="benchmark-choice"><input type="checkbox" name="benchmarks" value="${escapeHtml(item.id)}" ${index === 0 ? "checked" : ""}><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.case_id)}</small></span></label>`).join(""); restoreLocalSetup(false); }).catch(() => { benchmarkList.textContent = "Could not load local Benchmark catalog."; });
+request("/api/catalog").then(response => {
+  if (!response.benchmarks) throw new Error(response.error || "Catalog unavailable");
+  catalog = response;
+  document.querySelector("#case-count").textContent = `${catalog.benchmarks.length} available`;
+  document.querySelectorAll("input[name$=python_executable]").forEach(input => { input.value = catalog.python_executable; });
+  benchmarkList.innerHTML = catalog.benchmarks.map(item => `<label class="benchmark-choice"><input type="checkbox" name="benchmarks" value="${escapeHtml(item.id)}"><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.case_id)} · ${escapeHtml(item.status)} · hard timeout ${escapeHtml(item.timeout_seconds)}s</small></span></label>`).join("");
+  if (!restoreLocalSetup(false)) applyEvaluationMode("fast");
+  else renderEvaluationMode();
+}).catch(() => { benchmarkList.textContent = "Could not load local Benchmark catalog."; });
 setSetupMode();
 syncExecutionMode();
 syncSourceMode();
