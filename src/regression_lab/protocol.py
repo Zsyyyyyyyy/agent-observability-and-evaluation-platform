@@ -246,6 +246,7 @@ def _seed_snapshot() -> int | str:
 def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str, str]], adapter: str,
                    external_command: list[str] | None, trials: int, use_docker: bool, bash: bool,
                    schedule_seed: int = DEFAULT_SCHEDULE_SEED,
+                   concurrency: int = 1,
                    comparison_intent: str = "prompt_profile_only",
                    allowed_differences: Iterable[str] = ("agents[].prompt_profile",),
                    prompt_profiles: dict[str, dict[str, str]] | None = None,
@@ -284,6 +285,8 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
             **({"agent_spec_snapshot": snapshot} if isinstance(snapshot, dict) else {}),
             "runtime_environment": runtime_environment_identity(interpreter) if interpreter else None,
         })
+    if concurrency not in {1, 2}:
+        raise ValueError("concurrency must be 1 or 2")
     protocol: dict[str, Any] = {
         "schema_version": PROTOCOL_SCHEMA_VERSION,
         "comparison_intent": comparison_intent,
@@ -298,7 +301,12 @@ def build_protocol(*, manifests: Iterable[dict[str, Any]], agents: list[dict[str
             "top_p": _optional_float("AGENT_TOP_P", 1.0, maximum=1.0),
             "seed": _seed_snapshot(),
         },
-        "execution": {"trials_per_case": trials, "schedule_seed": schedule_seed},
+        "execution": {
+            "trials_per_case": trials,
+            "schedule_seed": schedule_seed,
+            "concurrency": concurrency,
+            "scheduling_policy": "paired_baseline_then_candidate",
+        },
         "sandbox": {"docker": use_docker, "bash": bash, "image": "python:3.11-slim" if use_docker else None},
         "platform": {
             "python": platform.python_version(), "implementation": platform.python_implementation(),
@@ -328,22 +336,41 @@ def compare_protocols(previous: dict[str, Any], current: dict[str, Any]) -> dict
     return {"level": level, "differences": differences}
 
 
-def build_execution_plan(jobs: Iterable[dict[str, Any]], agents: list[dict[str, str]], *, seed: int) -> dict[str, Any]:
-    """Create a repeatable, Trial-paired and interleaved Agent schedule."""
+def build_execution_plan(
+    jobs: Iterable[dict[str, Any]], agents: list[dict[str, str]], *, seed: int, concurrency: int = 1,
+) -> dict[str, Any]:
+    """Create a repeatable Pair schedule with a fixed order inside each Pair."""
 
     if len(agents) < 2:
         raise ValueError("execution plan requires at least two agents")
+    if concurrency not in {1, 2}:
+        raise ValueError("concurrency must be 1 or 2")
     pairs = sorted((str(job["case_id"]), int(job["trial_index"]), str(job["job_id"])) for job in jobs)
     generator = random.Random(seed)
-    # 先冻结 Case/Trial 顺序，再为每一对版本随机先后，避免运行先后成为性能差异的隐含变量。
+    # Pair 之间可并行，但同一 Pair 固定基线在前，避免并发改变同一比较样本的执行语义。
     generator.shuffle(pairs)
     entries: list[dict[str, Any]] = []
+    plan_pairs: list[dict[str, Any]] = []
     for case_id, trial_index, job_id in pairs:
-        order = list(agents)
-        generator.shuffle(order)
-        for agent in order:
+        pair_id = f"{case_id}_trial_{trial_index:03d}"
+        pair_entries: list[int] = []
+        for pair_order, agent in enumerate(agents, start=1):
             entries.append({
                 "schedule_index": len(entries) + 1, "case_id": case_id, "trial_index": trial_index,
                 "job_id": job_id, "agent_label": agent["id"], "agent_version": agent["version"],
+                "pair_id": pair_id, "pair_order": pair_order,
             })
-    return {"schema_version": 1, "seed": seed, "entries": entries}
+            pair_entries.append(len(entries))
+        plan_pairs.append({
+            "pair_id": pair_id, "case_id": case_id, "trial_index": trial_index, "job_id": job_id,
+            "entry_schedule_indices": pair_entries,
+            "agent_order": [agent["id"] for agent in agents],
+        })
+    return {
+        "schema_version": 2,
+        "seed": seed,
+        "concurrency": concurrency,
+        "scheduling_policy": "paired_baseline_then_candidate",
+        "pairs": plan_pairs,
+        "entries": entries,
+    }

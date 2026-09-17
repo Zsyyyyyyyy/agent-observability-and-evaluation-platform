@@ -88,6 +88,46 @@ class ExperimentIntegrityTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["issues"])
         self.assertEqual(report["trial_count"], 1)
 
+    def test_verifies_concurrent_pair_plan_without_changing_trial_identity(self):
+        with TemporaryDirectory() as directory:
+            runtime, _ = self._runtime(Path(directory))
+            protocol_path = runtime / "protocol.json"
+            protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+            protocol["execution"] = {"concurrency": 2}
+            protocol["protocol_fingerprint"] = protocol_fingerprint(protocol)
+            protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+            experiment_path = runtime / "experiment.json"
+            experiment = json.loads(experiment_path.read_text(encoding="utf-8"))
+            experiment["protocol"]["fingerprint"] = protocol["protocol_fingerprint"]
+            experiment_path.write_text(json.dumps(experiment), encoding="utf-8")
+            attempt_path = runtime / "baseline" / "case" / "case_trial_001" / "attempts" / "attempt_001" / "result.json"
+            result = json.loads(attempt_path.read_text(encoding="utf-8"))
+            result["protocol_fingerprint"] = protocol["protocol_fingerprint"]
+            attempt_path.write_text(json.dumps(result), encoding="utf-8")
+            attempt_manifest = attempt_path.parent / "attempt-manifest.json"
+            manifest = json.loads(attempt_manifest.read_text(encoding="utf-8"))
+            manifest["result_sha256"] = "sha256:" + hashlib.sha256(attempt_path.read_bytes()).hexdigest()
+            attempt_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+            selected_path = attempt_path.parent.parent.parent / "result.json"
+            selected_path.write_text(json.dumps({**result, "attempt_path": str(attempt_path.parent)}), encoding="utf-8")
+            plan_path = runtime / "execution-plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan.update({
+                "schema_version": 2,
+                "concurrency": 2,
+                "scheduling_policy": "paired_baseline_then_candidate",
+                "pairs": [{
+                    "pair_id": "case_trial_001", "case_id": "case", "trial_index": 1,
+                    "job_id": "case_trial_001", "entry_schedule_indices": [1], "agent_order": ["baseline"],
+                }],
+            })
+            plan["entries"][0].update({"schedule_index": 1, "pair_id": "case_trial_001", "pair_order": 1})
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            report = verify_experiment_runtime(runtime)
+
+        self.assertTrue(report["valid"], report["issues"])
+
     def test_detects_tampered_immutable_attempt_result(self):
         with TemporaryDirectory() as directory:
             runtime, attempt_result = self._runtime(Path(directory))

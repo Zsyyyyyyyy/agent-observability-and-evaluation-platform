@@ -144,6 +144,70 @@ class DashboardRepositoryTests(unittest.TestCase):
             self.assertIsNone(repo.dashboard()["avg_tool_calls"])
             self.assertIsNone(repo.dashboard()["avg_model_tokens"])
 
+    def test_failed_trials_keep_missing_duration_unavailable_in_console(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, status in enumerate(("timed_out", "agent_failed"), start=1):
+                trial = root / f"trial_{index}"
+                trial.mkdir()
+                duration = 0 if status == "timed_out" else None
+                (trial / "result.json").write_text(json.dumps({
+                    "trial_id": f"case_trial_{index:03d}",
+                    "status": status,
+                    "evaluation": {"passed": False},
+                    "scores": [{"evaluator": "budget", "actual": {"duration_ms": duration}}],
+                }), encoding="utf-8")
+
+            repo = DashboardRepository(root)
+            rows = repo.trials()
+            average_duration = repo.dashboard()["avg_duration_ms"]
+
+        self.assertEqual([row["duration_ms"] for row in rows], [None, None])
+        self.assertIsNone(average_duration)
+
+    def test_timed_out_trials_do_not_contribute_cost_averages(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            capabilities = {
+                "schema_version": 2,
+                "trace": True,
+                "hierarchical_trace": True,
+                "model_usage": True,
+                "tool_trace": True,
+                "tool_semantics": False,
+                "test_trace": False,
+                "context_trace": False,
+                "workflow_trace": False,
+                "mcp_trace": False,
+            }
+            for name, status, duration, tools, tokens in (
+                ("timed_out", "timed_out", 0, 8, 800),
+                ("completed", "completed", 40, 2, 20),
+            ):
+                trial = root / name
+                trial.mkdir()
+                (trial / "result.json").write_text(json.dumps({
+                    "trial_id": f"case_{name}", "status": status,
+                    "evaluation": {"passed": status == "completed"},
+                    "model_usage": {"total_tokens": tokens},
+                    "adapter_capabilities": capabilities,
+                    "scores": [
+                        {"evaluator": "budget", "passed": True, "actual": {"duration_ms": duration}},
+                        {"evaluator": "tool_integrity", "actual": {"tool_calls": tools}},
+                    ],
+                }), encoding="utf-8")
+
+            rows = DashboardRepository(root).trials()
+            dashboard = DashboardRepository(root).dashboard()
+
+        by_status = {row["status"]: row for row in rows}
+        self.assertEqual(by_status["timed_out"]["budget_status"], "hard_timeout_reached")
+        self.assertEqual(by_status["completed"]["budget_status"], "within_budget")
+        self.assertIsNone(by_status["timed_out"]["duration_ms"])
+        self.assertEqual(dashboard["avg_duration_ms"], 40.0)
+        self.assertEqual(dashboard["avg_tool_calls"], 2.0)
+        self.assertEqual(dashboard["avg_model_tokens"], 20.0)
+
     def test_latest_gate_reads_negative_control_decision(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

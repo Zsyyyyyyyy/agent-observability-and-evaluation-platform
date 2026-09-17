@@ -257,7 +257,7 @@ def _print_experiment(runtime: Path, report: dict[str, object] | None, gate: dic
 
 def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[str], trials: int,
                     unsafe_trusted_host: bool, *, open_console: bool, port: int | None,
-                    output_dir: str | None = None, resume: bool = False) -> int:
+                    output_dir: str | None = None, resume: bool = False, concurrency: int = 1) -> int:
     try:
         baseline, candidate = _validate_experiment_specs(baseline_path, candidate_path)
     except AgentSpecError as exc:
@@ -276,6 +276,7 @@ def _run_experiment(baseline_path: str, candidate_path: str, benchmarks: list[st
         "--adapter", "external-command", "--agents", f"baseline:{baseline.version},candidate:{candidate.version}",
         "--external-arm-configs", json.dumps(arm_configs), "--trials", str(trials),
         "--output-dir", str(runtime), "--project-id", baseline.project_id,
+        "--concurrency", str(concurrency),
     ]
     for benchmark in benchmarks:
         command.extend(["--manifest", str(Path(benchmark).resolve())])
@@ -436,6 +437,8 @@ def main() -> int:
     run.add_argument("--port", type=int, help="Console port used with --open")
     run.add_argument("--output-dir", help="reuse a known Experiment Runtime directory")
     run.add_argument("--resume", action="store_true", help="rerun only incomplete Trials in --output-dir")
+    run.add_argument("--concurrency", type=int, choices=(1, 2), default=1,
+                     help="maximum concurrent Case/repeat Pairs; versions inside a Pair stay serial")
     verify = experiment_commands.add_parser(
         "verify", help="verify Protocol, schedule, selected Attempts, Traces, and Gate linkage"
     )
@@ -461,7 +464,8 @@ def main() -> int:
         return _smoke_agent(args.spec, args.benchmark, args.unsafe_trusted_host, open_console=args.open, port=args.port)
     if args.command == "experiment" and args.experiment_command == "run":
         return _run_experiment(args.baseline, args.candidate, args.benchmark, args.trials, args.unsafe_trusted_host,
-                               open_console=args.open, port=args.port, output_dir=args.output_dir, resume=args.resume)
+                               open_console=args.open, port=args.port, output_dir=args.output_dir, resume=args.resume,
+                               concurrency=args.concurrency)
     if args.command == "experiment" and args.experiment_command == "verify":
         return _verify_experiment(args.runtime)
     if args.command == "trace" and args.trace_command == "verify":

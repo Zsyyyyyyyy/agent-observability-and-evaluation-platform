@@ -5,16 +5,16 @@
 ## 冻结内容
 
 - Benchmark：Manifest、Fixture 树、测试命令、工具策略与预算的哈希；
-- Agent：Adapter、版本标签、Agent 来源哈希，以及外部 Agent 握手返回的最终渲染 Prompt 集合哈希；
+- Agent：Adapter、版本标签、Agent 来源哈希，以及 Native SDK Agent 握手返回的最终渲染 Prompt 集合哈希；
 - Model：Provider、模型名、显式 `temperature` / `top_p` 与可选 `seed`；不保存密钥；
 - 平台：Evaluator/Trace Schema 来源哈希、Python/OS、Sandbox 配置与镜像标签；
-- 执行：每 Case 的重复次数与固定随机种子生成的成对交错计划。
+- 执行：每 Case 的重复次数、Pair concurrency、调度策略，以及固定随机种子生成的成对交错计划。
 
 `protocol_fingerprint` 是上述规范化对象的 SHA-256。它会写入 Experiment、每个 Attempt Manifest、选中 Attempt 索引和 Job Result。敏感环境变量（API key、Token、Authorization、Secret、Password）不会进入协议。
 
 对于 `external-command`，严格可比性还要求每个**选中 Attempt**的运行时入口源码 Hash 与 `protocol.json` 中对应 Agent 的 `agent_source_hash` 完全一致。该 Hash 由平台 Worker 在启动 Agent 前计算，不接受 Agent 自报；Hash 缺失或不一致时，报告标记为 `not_comparable`，Gate 不能将其解释为可晋级证据。`--report-only` 也会从选中 Attempt 的 Result 重新核验这一点。
 
-参考外部 Agent 支持 `--describe-protocol` 握手：平台通过标准输入发送版本标签和各 Case 的测试命令，Agent 只返回 Profile ID 与最终 System Prompt 集合的 SHA-256，不返回 Prompt 正文。缺少握手的新外部 Experiment 会在执行前失败关闭，避免把相同源码 Hash 误当成不同 Prompt 已被冻结。
+Native SDK 模式的外部 Agent 需要支持 `--describe-protocol` 握手：平台通过标准输入发送版本标签和各 Case 的测试命令，Agent 只返回 Profile ID 与最终 System Prompt 集合的 SHA-256，不返回 Prompt 正文。缺少握手的新 SDK Experiment 会在执行前失败关闭，避免把相同源码 Hash 误当成不同 Prompt 已被冻结。LangGraph Callback 模式不要求该额外 CLI 协议；平台会在协议中如实记录 Prompt Profile 未观测，并依赖 Agent 来源 Hash、冻结执行计划与平台测试 Evidence 维持比较口径。
 
 未配置采样环境变量时，平台和两套 OpenAI-compatible 客户端共同采用 `temperature=0.0`、`top_p=1.0`。`AGENT_SEED` 只有在显式设置时才发送给 Provider；未设置时协议记录 `not_configured`，不再用含义不清的 `null`。若 Provider 不支持 seed，后续应通过 Provider 能力声明记录 `unsupported`，不能由“未配置”推断。
 
@@ -26,9 +26,13 @@
 - 有协议的 Experiment 只有 `strict` 时可由 Gate 给出 `promote`；非严格协议结论为 `inconclusive`；
 - 协议冻结之前的历史 Artifact 维持可读，但标记 `legacy_unverified`，不能声称严格可比。
 
-## 交错执行
+## Pair 调度与交错执行
 
-`execution-plan.json` 对每个相同 `Case × Trial` 固定 Baseline/Candidate 顺序，并在各配对之间使用固定 Seed 打乱。这样避免总是先跑完一个版本而把模型服务负载或时间段变化误认为版本性能差异。计划的 `schedule_index` 随 Attempt Evidence 一同保存。
+`execution-plan.json` 对每个相同 `Case × Trial` 冻结一个稳定的 `pair_id`，并记录其 `entry_schedule_indices`、`agent_order`、`concurrency` 与 `scheduling_policy`。Pair identity 不属于比较指标；它只保证同一 Case 和重复索引的 Baseline/Candidate 仍被正确配对。
+
+同一 Pair 固定按 `baseline → candidate` 执行，两个版本不会并发；不同 Pair 才可以按冻结的 `concurrency` 并行。这样避免同一比较样本共享时间窗口，同时允许独立样本缩短总墙钟时间。各 Pair 之间仍使用固定 Seed 打乱，避免总是先跑完一个版本而把模型服务负载或时间段变化误认为版本性能差异。计划的 `schedule_index` 随 Attempt Evidence 一同保存。
+
+历史 `execution-plan.json` 没有 `pairs` 或 `concurrency` 字段时，平台按原有 `Case × Trial × Job` 配对键恢复 Pair，并将并发度解释为 `1`；不会改写旧 Runtime 或改变其已冻结的执行语义。
 
 ## 当前边界
 

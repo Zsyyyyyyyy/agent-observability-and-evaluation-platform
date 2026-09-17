@@ -20,6 +20,7 @@ SUPPORTED_ACCEPTANCE = frozenset({
     "test_exit_code == 0", "forbidden_path_changes == 0", "trace_status == complete", "result_status == completed",
     "path_policy blocks", "tool_integrity blocks", "timeout blocks",
 })
+STUDIO_PRESETS = frozenset({"fast", "standard"})
 
 
 def validate_identifier(value: Any, field: str) -> str:
@@ -205,6 +206,22 @@ def validate_manifest(manifest: dict[str, Any], project_root: str | Path | None 
         errors.append("schema_version must be an integer")
     if not isinstance(manifest.get("version"), int):
         errors.append("version must be an integer")
+
+    studio = manifest.get("studio")
+    if studio is not None:
+        if not isinstance(studio, dict):
+            errors.append("studio must be a map")
+        else:
+            presets = studio.get("presets")
+            if presets is not None:
+                if not isinstance(presets, list) or not all(isinstance(item, str) for item in presets):
+                    errors.append("studio.presets must be a string list")
+                elif len(presets) != len(set(presets)):
+                    errors.append("studio.presets must not contain duplicates")
+                elif any(item not in STUDIO_PRESETS for item in presets):
+                    errors.append("studio.presets must contain only fast or standard")
+                elif manifest.get("status") != "ready":
+                    errors.append("only ready Cases may declare studio.presets")
 
     fixture = manifest.get("fixture")
     task = manifest.get("task")

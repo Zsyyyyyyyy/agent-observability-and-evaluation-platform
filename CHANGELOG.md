@@ -2,6 +2,19 @@
 
 本项目仍处于本地 Agent 评测平台阶段。版本号描述当前工程成熟度，不代表多租户生产服务承诺。
 
+## 1.4.0 - 2026-09-07
+
+### Added
+
+- Pair 级执行并发：最多两个独立 `Case × Trial` Pair 可并行；同一 Pair 始终按 `baseline → candidate` 串行执行，默认并发度仍为 1。
+- Protocol 与 `execution-plan.json` 冻结 Pair identity、版本顺序、调度策略和 concurrency；历史无并发字段的 Runtime 保持按串行语义读取。
+- Studio 可选择 Pair concurrency，并在启动、取消、恢复与重启后恢复路径中保持独立 Workspace、Attempt、Trace 与日志 Artifact。
+
+### Changed
+
+- 微型 Case 的硬截止和版本显式冻结；Console 将缺失的 timeout 时长显示为 `N/A`，不再伪装为零或参与平均延迟。
+- Studio 将执行中硬截止与执行后的 duration、Token、工具调用预算检查分开表达。
+
 ## 1.3.3 - 2026-08-31
 
 ### Fixed
@@ -64,4 +77,4 @@
 - 公开导出会脱敏报告 JSON 与 Trace JSONL 中的本机路径和常见密钥形式。
 - Artifact 与 Demo 校验检测相对于冻结摘要的内容变化；它们不等价于数字签名或来源认证。
 
-> 仓库历史曾使用过过早的 `v1.0.0` 标签；`v0.2.0` 是当时对本地平台成熟度的重新标定。当前 v1.3 仍不承诺稳定远程服务、签名 Artifact 或多租户隔离。
+> 仓库历史曾使用过过早的 `v1.0.0` 标签；`v0.2.0` 是当时对本地平台成熟度的重新标定。当前 v1.4 仍不承诺稳定远程服务、签名 Artifact 或多租户隔离。

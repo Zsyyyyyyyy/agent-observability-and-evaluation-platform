@@ -1,7 +1,7 @@
 const api = async (url) => { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); };
 const hasNumber = value => value !== null && value !== undefined && Number.isFinite(Number(value));
 const fmt = (ms) => {
-  if (!hasNumber(ms)) return "—";
+  if (!hasNumber(ms)) return "N/A";
   const value = Number(ms);
   if (Math.abs(value) < 1000) return `${value.toFixed(value === 0 ? 0 : 1)}ms`;
   return `${(value / 1000).toFixed(1)}s`;
@@ -85,7 +85,8 @@ function renderProtocol() {
   const comparability=p.comparability || {}, level=String(comparability.level || 'not_available');
   hint.textContent=`${level.toUpperCase()} · ${String(p.fingerprint || '').slice(0,18)}…`;
   const yesNo=value=>value===true?'Docker':'trusted host';
-  content.innerHTML=`<div class="protocol-grid"><div><span>COMPARISON INTENT</span><strong>${esc(p.comparison_intent || 'unrecorded')}</strong></div><div><span>FIXED MODEL</span><strong>${esc(p.model || 'unconfigured')}</strong><small>${esc(p.provider || 'provider unrecorded')}</small></div><div><span>BENCHMARK</span><strong>${esc(String(p.case_count ?? 0))} Cases × ${esc(String(p.trials_per_case ?? '—'))} Trials</strong><small>paired schedule seed ${esc(String(p.schedule_seed ?? '—'))}</small></div><div><span>EXECUTION</span><strong>${esc(yesNo(p.docker))}</strong><small>${esc(p.image || 'no container image')}</small></div></div><div class="protocol-foot"><span>ALLOWED CHANGE</span><b>${esc((p.allowed_differences || []).join(', ') || 'none')}</b><span>PROTOCOL</span><b>${esc(String(p.fingerprint || 'unavailable'))}</b></div>`;
+  const concurrency=p.concurrency ?? 1;
+  content.innerHTML=`<div class="protocol-grid"><div><span>COMPARISON INTENT</span><strong>${esc(p.comparison_intent || 'unrecorded')}</strong></div><div><span>FIXED MODEL</span><strong>${esc(p.model || 'unconfigured')}</strong><small>${esc(p.provider || 'provider unrecorded')}</small></div><div><span>BENCHMARK</span><strong>${esc(String(p.case_count ?? 0))} Cases × ${esc(String(p.trials_per_case ?? '—'))} Trials</strong><small>paired schedule seed ${esc(String(p.schedule_seed ?? '—'))}</small></div><div><span>EXECUTION</span><strong>${esc(yesNo(p.docker))} · ${esc(String(concurrency))} Pair${concurrency === 1 ? '' : 's'}</strong><small>${esc(p.image || 'no container image')} · baseline → candidate</small></div></div><div class="protocol-foot"><span>ALLOWED CHANGE</span><b>${esc((p.allowed_differences || []).join(', ') || 'none')}</b><span>PROTOCOL</span><b>${esc(String(p.fingerprint || 'unavailable'))}</b></div>`;
 }
 function renderEvolution() {
   const content=document.querySelector('#evolution-content'), hint=document.querySelector('#evolution-hint');
@@ -302,7 +303,8 @@ function renderCaseDetail(caseId, shouldScroll = false) {
   const [base, candidate]=state.versions;
   const rows=state.trials.filter(t=>t.case_id===caseId), grouped=new Map();
   rows.forEach(row=>{const key=trialNumber(row);if(!grouped.has(key))grouped.set(key,{});grouped.get(key)[row.agent_version]=row;});
-  const trialCard=(row, role)=>row ? `<button type="button" data-trial="${encodeURIComponent(row.id)}" class="paired-trial-card ${role} ${row.passed?'pass':'fail'}"><span>${esc(role.toUpperCase())}</span><strong>${row.passed?'PASS':esc(String(row.failure_reason || row.status || 'NEEDS REVIEW').replaceAll('_',' '))}</strong><small>${fmt(row.duration_ms)} · ${fmtTokens(row.model_tokens)} · ${fmtTools(row.tool_calls)}</small></button>` : `<div class="paired-trial-card missing"><span>${esc(role.toUpperCase())}</span><strong>MISSING</strong><small>No artifact for this side.</small></div>`;
+  const trialDuration=row=>row?.status==='timed_out'?'N/A (hard timeout reached)':fmt(row?.duration_ms);
+  const trialCard=(row, role)=>row ? `<button type="button" data-trial="${encodeURIComponent(row.id)}" class="paired-trial-card ${role} ${row.passed?'pass':'fail'}"><span>${esc(role.toUpperCase())}</span><strong>${row.passed?'PASS':esc(String(row.failure_reason || row.status || 'NEEDS REVIEW').replaceAll('_',' '))}</strong><small>${trialDuration(row)} · ${fmtTokens(row.model_tokens)} · ${fmtTools(row.tool_calls)}</small></button>` : `<div class="paired-trial-card missing"><span>${esc(role.toUpperCase())}</span><strong>MISSING</strong><small>No artifact for this side.</small></div>`;
   const pairs=[...grouped.entries()].sort(([a],[b])=>Number(a)-Number(b)||a.localeCompare(b)).map(([index,pair])=>{const left=pair[base],right=pair[candidate],different=left?.passed!==right?.passed, behaviorPair=(activeBehaviorDiff().deltas || []).find(item=>item.case_id===caseId&&String(item.trial_index)===String(Number(index))); const patternItems=[...(behaviorPair?.removed_patterns || []).map(item=>`<span class="positive">✓ ${esc(item.pattern)} ${esc(String(item.delta))}</span>`),...(behaviorPair?.added_patterns || []).map(item=>`<span class="negative">! ${esc(item.pattern)} +${esc(String(item.delta))}</span>`)]; const behaviorNote=behaviorPair?`<div class="pair-behavior-delta"><b>BEHAVIOR Δ</b>${patternItems.length?patternItems.join(''):'<span class="flat">No semantic pattern change</span>'}</div>`:''; const traceButton=left&&right?`<button type="button" data-trace-diff="${encodeURIComponent(left.id)}|${encodeURIComponent(right.id)}">Compare traces</button>`:'';return `<section class="paired-trial-row ${different?'behavior-difference':''}"><div class="pair-index"><span>TRIAL</span><strong>${esc(String(index).padStart(3,'0'))}</strong>${different?'<small>OUTCOME DIFFERENCE</small>':''}${traceButton}</div>${trialCard(left,'baseline')}<div class="pair-arrow" aria-hidden="true">→</div>${trialCard(right,'candidate')}${behaviorNote}</section>`;}).join('');
   document.querySelector('#case-detail-content').innerHTML=pairs || '<p class="empty big">No paired Trial artifacts for this Case.</p>';
   document.querySelectorAll('[data-trial]').forEach(b=>b.addEventListener('click',()=>showTrial(decodeURIComponent(b.dataset.trial))));
@@ -498,5 +500,40 @@ function renderDiff(diff, changedFiles) {
   document.querySelector('#diff-status').textContent = patch ? 'raw patch · color coded' : 'no patch';
   document.querySelector('#diff').innerHTML = patch ? patch.split('\n').map(line => { const cls=line.startsWith('+')&&!line.startsWith('+++')?'diff-add':line.startsWith('-')&&!line.startsWith('---')?'diff-remove':line.startsWith('@@')?'diff-hunk':line.startsWith('diff --git')?'diff-file':''; return `<span class="diff-line ${cls}">${esc(line)||' '}</span>`; }).join('') : '<span class="empty">No diff artifact.</span>';
 }
-async function showTrial(id) { if (!state.runtimeAvailable) return; let response; try { response=await api(`/api/trials/${encodeURIComponent(id)}`); } catch { return; } if (response.available !== true || !sameContext(state.context, response.context)) return; const d=response.data || {}, r=d.result, behavior=r.behavior||{}, capabilities=behavior.adapter_capabilities||{}, unavailable=Object.entries(behavior.unavailable||{}), provenance=r.evidence_provenance||behavior.evidence_provenance||{}; const supported=Object.entries(capabilities).filter(([key,value])=>key!=='schema_version'&&value===true).map(([key])=>key.replaceAll('_',' ')); const capabilityChip=supported.length?`capability ${behavior.capability_source||'snapshot'}: ${supported.join(', ')}`:`capability ${behavior.capability_source||'unavailable'}`; const origins=[...new Set(Object.values(provenance).filter(value=>value&&value!=='not_observed'))]; const originChip=origins.length?`evidence ${origins.join(' · ')}`:'evidence not observed'; const evidenceChips=unavailable.slice(0,2).map(([metric,reason])=>`N/A ${metric}: ${reason}`); const modelUsage=capabilities.model_usage===true&&hasNumber(r.model_usage?.total_tokens)?`${Math.round(Number(r.model_usage.total_tokens)).toLocaleString()} tokens`:'N/A tokens'; document.querySelector('#detail-empty').hidden=true; document.querySelector('#detail').hidden=false; document.querySelector('#trace-diff-panel').hidden=true; document.querySelector('#detail-title').textContent=r.trial_id; const s=document.querySelector('#detail-status'); s.textContent=r.status; s.className=`status ${r.evaluation?.passed?'ok':'bad'}`; document.querySelector('#detail-stats').innerHTML=[`agent ${r.agent_version}`,`profile ${r.agent_profile||'default'}`,originChip,capabilityChip,...evidenceChips,modelUsage,`${r.changed_files?.length||0} files`].map(x=>`<span class="chip">${esc(x)}</span>`).join(''); state.traceEvents=d.trace || []; renderTrace(); renderDiff(r.git_diff, r.changed_files); document.querySelector('.detail-panel').scrollIntoView({behavior:'smooth',block:'nearest'}); }
+function budgetLabel(status) {
+  return {
+    hard_timeout_reached: 'hard timeout reached',
+    not_evaluated: 'not evaluated',
+    within_budget: 'within budget',
+    over_budget: 'over budget',
+  }[status] || 'not evaluated';
+}
+async function showTrial(id) {
+  if (!state.runtimeAvailable) return;
+  let response;
+  try { response=await api(`/api/trials/${encodeURIComponent(id)}`); }
+  catch { return; }
+  if (response.available !== true || !sameContext(state.context, response.context)) return;
+  const d=response.data || {}, r=d.result, trial=state.trials.find(row=>row.id===id), behavior=r.behavior||{};
+  const capabilities=behavior.adapter_capabilities||{}, unavailable=Object.entries(behavior.unavailable||{});
+  const provenance=r.evidence_provenance||behavior.evidence_provenance||{};
+  const supported=Object.entries(capabilities).filter(([key,value])=>key!=='schema_version'&&value===true).map(([key])=>key.replaceAll('_',' '));
+  const capabilityChip=supported.length?`capability ${behavior.capability_source||'snapshot'}: ${supported.join(', ')}`:`capability ${behavior.capability_source||'unavailable'}`;
+  const origins=[...new Set(Object.values(provenance).filter(value=>value&&value!=='not_observed'))];
+  const originChip=origins.length?`evidence ${origins.join(' · ')}`:'evidence not observed';
+  const evidenceChips=unavailable.slice(0,2).map(([metric,reason])=>`N/A ${metric}: ${reason}`);
+  const durationChip=r.status==='timed_out' ? 'Duration: N/A (hard timeout reached)' : `Duration: ${fmt(trial?.duration_ms)}`;
+  const budgetChip=`Execution budget: ${budgetLabel(trial?.budget_status)}`;
+  const modelUsage=capabilities.model_usage===true ? `Tokens: ${fmtTokens(trial?.model_tokens)}` : 'Tokens: N/A';
+  const toolUsage=capabilities.tool_trace===true ? `Tool calls: ${fmtTools(trial?.tool_calls)}` : 'Tool calls: N/A';
+  document.querySelector('#detail-empty').hidden=true; document.querySelector('#detail').hidden=false;
+  document.querySelector('#trace-diff-panel').hidden=true; document.querySelector('#detail-title').textContent=r.trial_id;
+  const status=document.querySelector('#detail-status'); status.textContent=r.status; status.className=`status ${r.evaluation?.passed?'ok':'bad'}`;
+  document.querySelector('#detail-stats').innerHTML=[
+    `agent ${r.agent_version}`, `profile ${r.agent_profile||'default'}`, durationChip, budgetChip,
+    originChip, capabilityChip, ...evidenceChips, modelUsage, toolUsage, `${r.changed_files?.length||0} files`,
+  ].map(value=>`<span class="chip">${esc(value)}</span>`).join('');
+  state.traceEvents=d.trace || []; renderTrace(); renderDiff(r.git_diff, r.changed_files);
+  document.querySelector('.detail-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
 document.querySelector('#refresh').onclick=load; document.querySelector('#version-filter').onchange=applyFilters; document.querySelector('#outcome-filter').onchange=applyFilters; document.querySelector('#case-select').onchange=e=>renderCaseDetail(e.target.value, false); document.querySelectorAll('.metric-tabs [data-metric]').forEach(tab=>tab.onclick=()=>{state.metric=tab.dataset.metric;if(state.selectedCase)renderCaseDetail(state.selectedCase,false);}); document.querySelectorAll('[data-trace-view]').forEach(tab=>tab.onclick=()=>{state.traceView=tab.dataset.traceView;renderTrace();}); document.querySelector('#close-case').onclick=()=>{document.querySelector('#case-detail-panel').hidden=true;state.selectedCase=null;renderMatrix();}; load();

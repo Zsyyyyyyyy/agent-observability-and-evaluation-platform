@@ -7,10 +7,36 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _prepared_request, _prepared_request_with_snapshots, _run_state, command_for, handler_for, main, preflight, recoverable_runs
+from scripts.serve_studio import REGRESSION, STUDIO_HOST, StudioRun, _load_recoverable_request, _prepared_request, _prepared_request_with_snapshots, _run_state, _start_experiment_process, benchmark_catalog, command_for, handler_for, main, preflight, recoverable_runs, studio_presets
 
 
 class RunStudioTests(unittest.TestCase):
+    def _write_agent_spec(
+        self,
+        path: Path,
+        *,
+        version: str,
+        project_id: str = "studio-fixture",
+        agent_id: str = "studio-agent",
+        observation_mode: str = "blackbox",
+    ) -> Path:
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "project_id": project_id,
+            "agent": {"id": agent_id, "version": version},
+            "runtime": {"command": [sys.executable]},
+            "observation": {"mode": observation_mode},
+        }), encoding="utf-8")
+        return path
+
+    def _initialize_git_repository(self, root: Path) -> None:
+        for arguments in (
+            ("init",),
+            ("config", "user.email", "test@example.invalid"),
+            ("config", "user.name", "Studio Test"),
+        ):
+            subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+
     def _request(self, baseline: Path, candidate: Path, **overrides):
         request = {
             "baseline": str(baseline), "candidate": str(candidate), "benchmarks": ["smoke-case-design.yaml"],
@@ -23,21 +49,82 @@ class RunStudioTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
             for path, version in ((baseline, "v1"), (candidate, "v2")):
-                path.write_text(json.dumps({
-                    "schema_version": 1, "project_id": "studio-fixture", "agent": {"id": "studio-agent", "version": version},
-                    "runtime": {"command": [sys.executable]}, "observation": {"mode": "blackbox"},
-                }), encoding="utf-8")
+                self._write_agent_spec(path, version=version)
             result = preflight(self._request(baseline, candidate))
 
         self.assertTrue(result["valid"])
         self.assertEqual(result["configuration"]["trial_count"], 6)
         self.assertIn("当前主机", result["warnings"][0])
 
+    def test_preflight_freezes_selected_pair_concurrency(self):
+        with TemporaryDirectory() as directory:
+            baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
+            for path, version in ((baseline, "v1"), (candidate, "v2")):
+                self._write_agent_spec(path, version=version)
+            request = self._request(baseline, candidate, concurrency=2)
+            result = preflight(request)
+            command = command_for(request)
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["configuration"]["pair_concurrency"], 2)
+        self.assertEqual(command[command.index("--concurrency") + 1], "2")
+
     def test_preflight_requires_explicit_trusted_host_confirmation(self):
         result = preflight({"execution_mode": "trusted_host", "trusted_host_confirmed": False})
 
         self.assertFalse(result["valid"])
         self.assertIn("请确认仅在可信主机上运行 Agent", result["errors"])
+
+    def test_catalog_exposes_ready_presets_and_preflight_calculates_runtime_bound(self):
+        catalog = benchmark_catalog()
+        presets = studio_presets(catalog)
+        self.assertEqual([item["id"] for item in catalog if "fast" in item["presets"]], ["normalize-case-design.yaml"])
+        self.assertEqual(len([item for item in catalog if "standard" in item["presets"]]), 3)
+        self.assertEqual(presets["strict"]["repeat_count"], 3)
+
+        with TemporaryDirectory() as directory:
+            baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
+            for path, version in ((baseline, "v1"), (candidate, "v2")):
+                self._write_agent_spec(path, version=version)
+            fast = preflight(self._request(
+                baseline, candidate, benchmarks=["normalize-case-design.yaml"], trials=1, evaluation_mode="fast",
+            ))
+            standard = preflight(self._request(
+                baseline, candidate,
+                benchmarks=["normalize-case-design.yaml", "safe-slug-case.yaml", "parse-port-case.yaml"],
+                trials=1, evaluation_mode="standard",
+            ))
+            strict = preflight(self._request(
+                baseline, candidate, benchmarks=["safe-slug-case.yaml"], trials=3, evaluation_mode="strict",
+            ))
+
+        self.assertEqual((fast["configuration"]["evaluation_mode"], fast["configuration"]["trial_count"]), ("fast", 2))
+        self.assertEqual(fast["configuration"]["maximum_duration_seconds"], 180)
+        self.assertEqual((standard["configuration"]["evaluation_mode"], standard["configuration"]["trial_count"]), ("standard", 6))
+        self.assertEqual(standard["configuration"]["maximum_duration_seconds"], 660)
+        self.assertEqual((strict["configuration"]["evaluation_mode"], strict["configuration"]["trial_count"]), ("strict", 6))
+        self.assertEqual(strict["configuration"]["maximum_duration_seconds"], 720)
+
+    def test_preflight_normalizes_a_changed_preset_to_custom(self):
+        with TemporaryDirectory() as directory:
+            baseline, candidate = Path(directory) / "baseline.json", Path(directory) / "candidate.json"
+            for path, version in ((baseline, "v1"), (candidate, "v2")):
+                self._write_agent_spec(path, version=version)
+            result = preflight(self._request(
+                baseline, candidate, benchmarks=["safe-slug-case.yaml"], trials=1, evaluation_mode="fast",
+            ))
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["configuration"]["evaluation_mode"], "custom")
+        self.assertIn("Configuration differs from Fast preset; evaluated as Custom.", result["warnings"])
+
+    def test_preset_catalog_rejects_non_ready_or_invalid_recommendations(self):
+        catalog = benchmark_catalog()
+        fast = next(item for item in catalog if "fast" in item["presets"])
+        fast["valid"] = False
+
+        with self.assertRaisesRegex(ValueError, "Fast Cases must be ready"):
+            studio_presets(catalog)
 
     def test_quick_setup_generates_valid_internal_agent_specs(self):
         request = {
@@ -75,8 +162,7 @@ class RunStudioTests(unittest.TestCase):
     def test_git_quick_setup_freezes_a_dirty_candidate_without_touching_repository(self):
         with TemporaryDirectory() as directory:
             repository = Path(directory)
-            for arguments in (("init",), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Studio Test")):
-                subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+            self._initialize_git_repository(repository)
             (repository / "agent.py").write_text("VERSION = 'baseline'\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=repository, check=True, capture_output=True)
             subprocess.run(["git", "commit", "-m", "baseline"], cwd=repository, check=True, capture_output=True)
@@ -110,8 +196,7 @@ class RunStudioTests(unittest.TestCase):
     def test_git_quick_setup_runs_an_experiment_from_frozen_sources(self):
         with TemporaryDirectory() as directory, TemporaryDirectory() as runtime_directory:
             repository = Path(directory)
-            for arguments in (("init",), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Studio Test")):
-                subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+            self._initialize_git_repository(repository)
             agent = repository / "agent.py"
             agent.write_text(
                 "import argparse\nfrom pathlib import Path\n"
@@ -197,6 +282,55 @@ class RunStudioTests(unittest.TestCase):
             _run_state(str(runtime), "cancelled", {"launch_mode": "quick", "project_id": "project"})
             recovered = recoverable_runs()
         self.assertEqual(recovered[0]["runtime"], str(runtime))
+
+    def test_load_recoverable_request_requires_a_cancelled_platform_runtime(self):
+        with TemporaryDirectory() as directory, mock.patch("scripts.serve_studio.runtime_root", return_value=Path(directory)):
+            runtime = Path(directory) / "projects" / "project" / "experiments" / "run"
+            request = {"launch_mode": "quick", "project_id": "project"}
+            _run_state(str(runtime), "cancelled", request)
+
+            restored_runtime, restored_request = _load_recoverable_request(str(runtime))
+            _run_state(str(runtime), "completed", request)
+            with self.assertRaisesRegex(ValueError, "Runtime 不可恢复"):
+                _load_recoverable_request(str(runtime))
+
+        self.assertEqual(restored_runtime, str(runtime.resolve()))
+        self.assertEqual(restored_request, request)
+
+    def test_start_experiment_process_cleans_snapshots_when_process_creation_fails(self):
+        snapshots = mock.Mock()
+        with mock.patch("scripts.serve_studio.subprocess.Popen", side_effect=OSError("unavailable")), \
+             mock.patch("scripts.serve_studio.command_for", return_value=["experiment"]):
+            with self.assertRaisesRegex(OSError, "unavailable"):
+                _start_experiment_process(
+                    StudioRun(), prepared_request={}, source_snapshots=snapshots, runtime="/tmp/runtime",
+                    original_request={}, resume=False,
+                )
+
+        snapshots.cleanup.assert_called_once()
+
+    def test_start_experiment_process_records_running_state_and_resume_command(self):
+        process, snapshots, thread = mock.Mock(), mock.Mock(), mock.Mock()
+        run = StudioRun()
+        request = {"launch_mode": "quick", "project_id": "project"}
+        with mock.patch("scripts.serve_studio.subprocess.Popen", return_value=process), \
+             mock.patch("scripts.serve_studio.command_for", return_value=["experiment"]) as command, \
+             mock.patch("scripts.serve_studio._run_state") as state, \
+             mock.patch("scripts.serve_studio.threading.Thread", return_value=thread):
+            _start_experiment_process(
+                run, prepared_request={"baseline": "baseline"}, source_snapshots=snapshots,
+                runtime="/tmp/runtime", original_request=request, resume=True,
+            )
+
+        command_request = command.call_args.args[0]
+        self.assertEqual(command_request["studio_runtime"], "/tmp/runtime")
+        self.assertTrue(command_request["resume"])
+        self.assertIs(run.process, process)
+        self.assertIs(run.source_snapshots, snapshots)
+        self.assertEqual(run.request, request)
+        self.assertEqual(run.status, "running")
+        state.assert_called_once_with("/tmp/runtime", "running", request)
+        thread.start.assert_called_once()
 
     def test_preflight_rejects_unknown_benchmark_and_out_of_range_trials(self):
         result = preflight({"benchmarks": ["outside.yaml"], "trials": 99})

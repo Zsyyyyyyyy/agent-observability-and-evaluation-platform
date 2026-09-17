@@ -49,15 +49,45 @@ class StudioRun:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-def benchmark_catalog() -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+def benchmark_catalog() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
     for path in sorted((REGRESSION / "benchmarks").glob("*.yaml")):
         try:
             manifest = load_manifest(path)
         except (OSError, ManifestError):
             continue
-        rows.append({"id": path.name, "title": str(manifest.get("title") or path.stem), "case_id": str(manifest.get("id") or path.stem)})
+        validation = validate_manifest(manifest, REGRESSION)
+        execution = manifest.get("execution")
+        studio = manifest.get("studio")
+        presets = studio.get("presets", []) if isinstance(studio, dict) else []
+        rows.append({
+            "id": path.name,
+            "title": str(manifest.get("title") or path.stem),
+            "case_id": str(manifest.get("id") or path.stem),
+            "status": str(manifest.get("status") or "draft"),
+            "timeout_seconds": execution.get("timeout_seconds") if isinstance(execution, dict) else None,
+            "presets": list(presets) if isinstance(presets, list) else [],
+            "valid": validation.valid,
+        })
     return rows
+
+
+def studio_presets(catalog: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    """Return the small Studio-only presets and reject a broken release catalog early."""
+
+    presets = {
+        "fast": {"repeat_count": 1, "gate_semantics": "diagnostic_only"},
+        "standard": {"repeat_count": 1, "gate_semantics": "comparison_only"},
+        "strict": {"repeat_count": 3, "gate_semantics": "promotion_eligible"},
+    }
+    for name, expected_count in (("fast", 1), ("standard", 3)):
+        cases = [item for item in catalog if name in item["presets"]]
+        if len(cases) != expected_count:
+            raise ValueError(f"Studio preset configuration invalid: {name.title()} requires exactly {expected_count} ready Case")
+        for case in cases:
+            if not case["valid"] or case["status"] != "ready" or not isinstance(case["timeout_seconds"], int) or case["timeout_seconds"] <= 0:
+                raise ValueError(f"Studio preset configuration invalid: {name.title()} Cases must be ready with a valid timeout_seconds")
+    return presets
 
 
 def _selected_manifests(values: object) -> list[Path]:
@@ -67,6 +97,49 @@ def _selected_manifests(values: object) -> list[Path]:
     if len(values) != len(set(values)) or any(item not in allowed for item in values):
         raise ValueError("Benchmark 选择无效，请刷新页面后重试")
     return [allowed[item] for item in values]
+
+
+def _effective_evaluation_mode(request: dict[str, object], catalog: list[dict[str, object]]) -> tuple[str, str | None]:
+    requested = request.get("evaluation_mode")
+    if requested not in {"fast", "standard", "strict", "custom"}:
+        return "custom", None
+    selected = request.get("benchmarks")
+    trials = request.get("trials")
+    if requested in {"fast", "standard"}:
+        expected = {item["id"] for item in catalog if requested in item["presets"]}
+        if isinstance(selected, list) and len(selected) == len(expected) and set(selected) == expected and trials == 1:
+            return str(requested), None
+        return "custom", f"Configuration differs from {requested.title()} preset; evaluated as Custom."
+    if requested == "strict" and isinstance(selected, list) and selected and trials == 3:
+        return "strict", None
+    if requested == "strict":
+        return "custom", "Configuration differs from Strict preset; evaluated as Custom."
+    return "custom", None
+
+
+def _preflight_configuration(
+    manifests: list[Path], trials: int, concurrency: int, request: dict[str, object], catalog: list[dict[str, object]],
+) -> dict[str, object]:
+    by_id = {item["id"]: item for item in catalog}
+    mode, mode_warning = _effective_evaluation_mode(request, catalog)
+    cases = [
+        {"id": str(by_id[path.name]["case_id"]), "title": str(by_id[path.name]["title"]), "timeout_seconds": by_id[path.name]["timeout_seconds"]}
+        for path in manifests
+    ]
+    timeout_total = sum(case["timeout_seconds"] for case in cases if isinstance(case["timeout_seconds"], int))
+    gate_semantics = studio_presets(catalog)[mode]["gate_semantics"] if mode != "custom" else "configuration_dependent"
+    configuration: dict[str, object] = {
+        "evaluation_mode": mode, "repeat_count": trials, "version_count": 2,
+        "pair_concurrency": concurrency,
+        "benchmark_count": len(manifests), "case_count": len(manifests),
+        "trial_count": len(manifests) * trials * 2,
+        # 这是所有 Pair 串行时的绝对上界；并发只缩短墙钟时间，不改变单个 Trial 硬截止。
+        "maximum_duration_seconds": timeout_total * trials * 2,
+        "gate_semantics": gate_semantics, "cases": cases,
+    }
+    if mode_warning:
+        configuration["mode_warning"] = mode_warning
+    return configuration
 
 
 def _spec_path(value: object, label: str) -> Path:
@@ -215,6 +288,11 @@ def preflight(request: object) -> dict[str, object]:
         return {"valid": False, "errors": ["请求格式无效"]}
     errors: list[str] = []
     source_plan = None
+    catalog = benchmark_catalog()
+    try:
+        studio_presets(catalog)
+    except ValueError as exc:
+        errors.append(str(exc))
     try:
         if request.get("launch_mode") == "quick" and request.get("source_mode", "two_entries") == "git_repository":
             source_plan = _git_plan(request)
@@ -247,6 +325,9 @@ def preflight(request: object) -> dict[str, object]:
     trials = request.get("trials")
     if isinstance(trials, bool) or not isinstance(trials, int) or not 1 <= trials <= MAX_TRIALS:
         errors.append(f"重复次数必须是 1 到 {MAX_TRIALS} 的整数")
+    concurrency = request.get("concurrency", 1)
+    if isinstance(concurrency, bool) or concurrency not in {1, 2}:
+        errors.append("Pair 并发度只能是 1 或 2")
     execution_mode = request.get("execution_mode", "docker")
     if execution_mode not in {"docker", "trusted_host"}:
         errors.append("执行环境无效")
@@ -260,14 +341,21 @@ def preflight(request: object) -> dict[str, object]:
     observation_mode = request.get("observation_mode") if request.get("launch_mode") == "quick" else (baseline.observation_mode if baseline else None)
     if observation_mode == "langgraph":
         warnings.append("LangGraph 模式只需在 graph.invoke()/stream() 入口加入一次平台 Callback；无需 Agent Output 文件或节点级埋点。")
+    if manifests and isinstance(trials, int) and isinstance(concurrency, int):
+        configuration_details = _preflight_configuration(manifests, trials, concurrency, request, catalog)
+        mode_warning = configuration_details.pop("mode_warning", None)
+        if isinstance(mode_warning, str):
+            warnings.append(mode_warning)
+    else:
+        configuration_details = {}
     if errors:
         return {"valid": False, "errors": errors, "warnings": warnings}
     if source_plan is not None:
         configuration = {
             "project_id": request.get("project_id"), "agent_id": request.get("agent_id"),
             "baseline_version": request.get("baseline_version"), "candidate_version": request.get("candidate_version"),
-            "benchmark_count": len(manifests), "trial_count": len(manifests) * trials * 2,
             "execution_mode": execution_mode,
+            **configuration_details,
             "git_sources": {
                 "baseline_revision": source_plan.baseline_revision,
                 "candidate_revision": source_plan.candidate_revision,
@@ -283,8 +371,8 @@ def preflight(request: object) -> dict[str, object]:
         "configuration": {
             "project_id": baseline.project_id, "agent_id": baseline.agent_id,
             "baseline_version": baseline.version, "candidate_version": candidate.version,
-            "benchmark_count": len(manifests), "trial_count": len(manifests) * trials * 2,
             "execution_mode": execution_mode,
+            **configuration_details,
         },
     }
 
@@ -301,6 +389,7 @@ def command_for(request: dict[str, object]) -> list[str]:
         "--baseline", str(Path(str(request["baseline"])).expanduser().resolve()),
         "--candidate", str(Path(str(request["candidate"])).expanduser().resolve()),
         "--trials", str(request["trials"]),
+        "--concurrency", str(request.get("concurrency", 1)),
     ]
     for manifest in _selected_manifests(request["benchmarks"]):
         command.extend(["--benchmark", str(manifest)])
@@ -354,6 +443,59 @@ def _runtime_for(request: dict[str, object]) -> str:
     baseline = str(request.get("baseline_version") or "baseline")
     candidate = str(request.get("candidate_version") or "candidate")
     return str(runtime_root() / "projects" / project / "experiments" / f"{agent}-{baseline}-vs-{candidate}-{stamp}")
+
+
+def _load_recoverable_request(runtime: str) -> tuple[str, dict[str, object]]:
+    """读取并校验可恢复 Runtime 中冻结的 Studio 请求。"""
+
+    root = Path(runtime).resolve()
+    state_path = root / "experiment-state.json"
+    if not state_path.is_relative_to(runtime_root().resolve()) or not state_path.is_file():
+        raise ValueError("Runtime 不属于当前平台目录")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Runtime 状态不可读取") from exc
+    request = state.get("request")
+    if state.get("status") != "cancelled" or not isinstance(request, dict):
+        raise ValueError("Runtime 不可恢复")
+    return str(root), request
+
+
+def _start_experiment_process(
+    run: StudioRun,
+    *,
+    prepared_request: dict[str, object],
+    source_snapshots: GitSourceSnapshots | None,
+    runtime: str,
+    original_request: dict[str, object],
+    resume: bool,
+) -> None:
+    """启动 Experiment 子进程，并登记其 Runtime、快照和日志读取状态。"""
+
+    command_request = {**prepared_request, "studio_runtime": runtime}
+    if resume:
+        command_request["resume"] = True
+    with run.lock:
+        if run.process is not None and run.process.poll() is None:
+            if source_snapshots:
+                source_snapshots.cleanup()
+            raise RuntimeError("已有 Experiment 正在运行")
+        try:
+            process = subprocess.Popen(
+                command_for(command_request), cwd=REGRESSION, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True,
+            )
+        except OSError:
+            if source_snapshots:
+                source_snapshots.cleanup()
+            raise
+        run.process, run.source_snapshots, run.request = process, source_snapshots, original_request
+        run.status, run.runtime, run.returncode, run.logs = "running", runtime, None, []
+        if not resume:
+            run.console_url = None
+        _run_state(runtime, "running", original_request)
+        threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
 
 
 def _read_run_output(run: StudioRun) -> None:
@@ -421,7 +563,12 @@ def handler_for(static_root: Path, run: StudioRun):
 
         def do_GET(self) -> None:
             path = urlparse(self.path).path
-            if path == "/api/catalog": return self._json({"benchmarks": benchmark_catalog(), "max_trials": MAX_TRIALS, "python_executable": sys.executable})
+            if path == "/api/catalog":
+                try:
+                    catalog = benchmark_catalog()
+                    return self._json({"benchmarks": catalog, "presets": studio_presets(catalog), "max_trials": MAX_TRIALS, "python_executable": sys.executable})
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             if path == "/api/recoveries": return self._json({"runs": recoverable_runs()})
             if path == "/api/run": return self._json(run_status(run))
             if path == "/": self.path = "/studio.html"
@@ -450,54 +597,38 @@ def handler_for(static_root: Path, run: StudioRun):
                     prepared, snapshots = _prepared_request_with_snapshots(previous)
                 except (ValueError, AgentSpecError, GitSourceError) as exc:
                     return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                prepared = {**prepared, "studio_runtime": runtime, "resume": True}
                 try:
-                    process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                except OSError:
-                    if snapshots:
-                        snapshots.cleanup()
-                    raise
-                with run.lock:
-                    run.process, run.source_snapshots = process, snapshots
-                    run.status, run.returncode, run.logs = "running", None, []
-                    _run_state(runtime, "running")
-                    threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+                    _start_experiment_process(
+                        run, prepared_request=prepared, source_snapshots=snapshots, runtime=runtime,
+                        original_request=previous, resume=True,
+                    )
+                except RuntimeError as exc:
+                    return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
                 return self._json(run_status(run), HTTPStatus.ACCEPTED)
             if path == "/api/run/recover":
                 if not isinstance(request, dict) or not isinstance(request.get("runtime"), str):
                     return self._json({"error": "Runtime 路径无效"}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                root = Path(request["runtime"]).resolve()
-                state_path = root / "experiment-state.json"
-                if not state_path.is_relative_to(runtime_root()) or not state_path.is_file():
-                    return self._json({"error": "Runtime 不属于当前平台目录"}, HTTPStatus.UNPROCESSABLE_ENTITY)
                 try:
-                    state = json.loads(state_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    return self._json({"error": "Runtime 状态不可读取"}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                previous = state.get("request")
-                if state.get("status") != "cancelled" or not isinstance(previous, dict):
-                    return self._json({"error": "Runtime 不可恢复"}, HTTPStatus.CONFLICT)
+                    runtime, previous = _load_recoverable_request(request["runtime"])
+                except ValueError as exc:
+                    status = HTTPStatus.CONFLICT if str(exc) == "Runtime 不可恢复" else HTTPStatus.UNPROCESSABLE_ENTITY
+                    return self._json({"error": str(exc)}, status)
                 # 复用下方 resume 流程所需的内存状态；源码快照会重新创建并由协议校验。
                 with run.lock:
                     if run.process is not None and run.process.poll() is None:
                         return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
-                    run.request, run.runtime = previous, str(root)
+                    run.request, run.runtime = previous, runtime
                 try:
                     prepared, snapshots = _prepared_request_with_snapshots(previous)
                 except (ValueError, AgentSpecError, GitSourceError) as exc:
                     return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
-                prepared = {**prepared, "studio_runtime": str(root), "resume": True}
                 try:
-                    process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                except OSError:
-                    if snapshots:
-                        snapshots.cleanup()
-                    raise
-                with run.lock:
-                    run.process, run.source_snapshots = process, snapshots
-                    run.status, run.returncode, run.logs = "running", None, []
-                    _run_state(str(root), "running", previous)
-                    threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+                    _start_experiment_process(
+                        run, prepared_request=prepared, source_snapshots=snapshots, runtime=runtime,
+                        original_request=previous, resume=True,
+                    )
+                except RuntimeError as exc:
+                    return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
                 return self._json(run_status(run), HTTPStatus.ACCEPTED)
             if path != "/api/run": return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             checked = preflight(request)
@@ -511,23 +642,14 @@ def handler_for(static_root: Path, run: StudioRun):
                 prepared, snapshots = _prepared_request_with_snapshots(request)
             except (ValueError, AgentSpecError, GitSourceError) as exc:
                 return self._json({"valid": False, "errors": [str(exc)]}, HTTPStatus.UNPROCESSABLE_ENTITY)
-            with run.lock:
-                if run.process is not None and run.process.poll() is None:
-                    if snapshots:
-                        snapshots.cleanup()
-                    return self._json({"error": "已有 Experiment 正在运行"}, HTTPStatus.CONFLICT)
-                runtime = _runtime_for(request)
-                prepared = {**prepared, "studio_runtime": runtime}
-                try:
-                    run.process = subprocess.Popen(command_for(prepared), cwd=REGRESSION, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-                except OSError:
-                    if snapshots:
-                        snapshots.cleanup()
-                    raise
-                run.source_snapshots, run.request = snapshots, request
-                run.status, run.runtime, run.console_url, run.returncode, run.logs = "running", runtime, None, None, []
-                _run_state(runtime, "running", request)
-                threading.Thread(target=_read_run_output, args=(run,), daemon=True).start()
+            runtime = _runtime_for(request)
+            try:
+                _start_experiment_process(
+                    run, prepared_request=prepared, source_snapshots=snapshots, runtime=runtime,
+                    original_request=request, resume=False,
+                )
+            except RuntimeError as exc:
+                return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
             return self._json(run_status(run), HTTPStatus.ACCEPTED)
 
     return StudioHandler

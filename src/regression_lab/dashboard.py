@@ -62,6 +62,18 @@ class DashboardRepository:
                 tool_calls = None
             if capabilities.get("model_usage") is not True:
                 model_tokens = None
+            duration_ms = _observed_number((scores.get("budget") or {}).get("actual", {}).get("duration_ms"))
+            # 旧版超时 Artifact 曾把未闭合根 Span 写成 0ms。超时不可能提供
+            # 可信的零耗时，Console 读取历史证据时将它恢复为不可用。
+            if result.get("status") == "timed_out" and duration_ms == 0:
+                duration_ms = None
+            budget = scores.get("budget") or {}
+            if result.get("status") == "timed_out":
+                budget_status = "hard_timeout_reached"
+            elif duration_ms is None:
+                budget_status = "not_evaluated"
+            else:
+                budget_status = "within_budget" if budget.get("passed") is True else "over_budget"
             rows.append({
                 "id": result["console_id"], "trial_id": result.get("trial_id"), "agent_version": result.get("agent_version"),
                 "case_id": result.get("case_id") or str(result.get("trial_id", "")).rsplit("_trial_", 1)[0],
@@ -73,7 +85,8 @@ class DashboardRepository:
                 "failure_reason": (result.get("failure_attribution") or {}).get("reason"),
                 "failure_span": (result.get("failure_attribution") or {}).get("failure_span"),
                 "failure_evidence": (result.get("failure_attribution") or {}).get("evidence"),
-                "duration_ms": (scores.get("budget") or {}).get("actual", {}).get("duration_ms", 0),
+                "duration_ms": duration_ms,
+                "budget_status": budget_status,
                 "tool_calls": tool_calls,
                 "model_tokens": model_tokens,
                 "changed_files": result.get("changed_files", []),
@@ -198,7 +211,8 @@ class DashboardRepository:
         rows = self.trials()
         count = len(rows) or 1
         def observed_average(metric: str) -> float | None:
-            values = [_observed_number(row.get(metric)) for row in rows]
+            # 超时 Trial 只说明进程被硬终止，不能参与任何成本均值。
+            values = [_observed_number(row.get(metric)) for row in rows if row["status"] != "timed_out"]
             observed = [float(value) for value in values if value is not None]
             return sum(observed) / len(observed) if observed else None
 
@@ -211,7 +225,7 @@ class DashboardRepository:
             "model_failed_rate": sum(row["status"] == "model_failed" for row in rows) / count if rows else 0.0,
             "trace_incomplete_count": sum(row["status"] == "trace_incomplete" for row in rows),
             "trace_incomplete_rate": sum(row["status"] == "trace_incomplete" for row in rows) / count if rows else 0.0,
-            "avg_duration_ms": sum(float(row["duration_ms"] or 0) for row in rows) / count if rows else 0.0,
+            "avg_duration_ms": observed_average("duration_ms"),
             "avg_tool_calls": observed_average("tool_calls"),
             "avg_model_tokens": observed_average("model_tokens"),
             "behavior": aggregate_behavior([
@@ -253,6 +267,7 @@ class DashboardRepository:
             "allowed_differences": raw.get("allowed_differences", []),
             "case_count": len(cases), "model": model.get("model"), "provider": model.get("provider"),
             "trials_per_case": execution.get("trials_per_case"), "schedule_seed": execution.get("schedule_seed"),
+            "concurrency": execution.get("concurrency", 1),
             "docker": sandbox.get("docker"), "image": sandbox.get("image"),
         }
 

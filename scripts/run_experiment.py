@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import subprocess
@@ -100,8 +101,33 @@ def _hydrate_job_diagnostics(job: dict, case_dir: Path) -> dict:
         for item in result.get("scores", [])
         if isinstance(item, dict)
     }
+    budget = (scores.get("budget", {}).get("actual") or {})
+    tool_integrity = (scores.get("tool_integrity", {}).get("actual") or {})
+    diff = (scores.get("diff", {}).get("actual") or {})
+    model_usage = result.get("model_usage") if isinstance(result.get("model_usage"), dict) else {}
+    capabilities = AdapterCapabilities.from_snapshot(result.get("adapter_capabilities"))
+
+    # Case summary 是方便查询的派生投影。报告重建时以选定 Attempt 为准，
+    # 让旧版“缺失即 0”的投影恢复为不可用，而不修改原始 Trial Artifact。
+    duration_ms = budget.get("duration_ms")
+    if result.get("status") == "timed_out" and duration_ms == 0:
+        duration_ms = None
+    hydrated["duration_ms"] = duration_ms if isinstance(duration_ms, (int, float)) else None
+    tool_calls = tool_integrity.get("tool_calls")
+    hydrated["tool_calls"] = tool_calls if isinstance(tool_calls, (int, float)) else None
+    total_tokens = model_usage.get("total_tokens")
+    hydrated["model_tokens"] = total_tokens if isinstance(total_tokens, (int, float)) else None
+    if capabilities is not None and not capabilities.tool_trace:
+        hydrated["tool_calls"] = None
+    if capabilities is not None and not capabilities.model_usage:
+        hydrated["model_tokens"] = None
+    added_lines = diff.get("added_lines")
+    hydrated["added_lines"] = added_lines if isinstance(added_lines, (int, float)) else None
+    deleted_lines = diff.get("deleted_lines")
+    hydrated["deleted_lines"] = deleted_lines if isinstance(deleted_lines, (int, float)) else None
+
     hydrated.setdefault("path_policy_passed", scores.get("path_policy", {}).get("passed"))
-    diff_violations = (scores.get("diff", {}).get("actual", {}) or {}).get("violations", [])
+    diff_violations = diff.get("violations", [])
     hydrated.setdefault(
         "diff_policy_violated",
         any(
@@ -317,6 +343,47 @@ def describe_prompt_profiles(command: list[str] | None, agents: list[dict[str, s
     return validated
 
 
+def _execution_pairs(execution_plan: dict) -> list[list[dict]]:
+    """从冻结计划恢复 Pair；历史计划按旧配对键兼容恢复。"""
+
+    entries = execution_plan.get("entries")
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise ValueError("Execution plan entries are invalid")
+
+    by_schedule_index: dict[int, dict] = {}
+    for entry in entries:
+        schedule_index = entry.get("schedule_index")
+        if not isinstance(schedule_index, int) or schedule_index in by_schedule_index:
+            raise ValueError("Execution plan schedule indexes are invalid")
+        by_schedule_index[schedule_index] = entry
+
+    persisted_pairs = execution_plan.get("pairs")
+    if isinstance(persisted_pairs, list):
+        pairs: list[list[dict]] = []
+        referenced_indexes: set[int] = set()
+        for pair in persisted_pairs:
+            indexes = pair.get("entry_schedule_indices") if isinstance(pair, dict) else None
+            if not isinstance(indexes, list) or not indexes:
+                raise ValueError("Execution plan pair is invalid")
+            if any(not isinstance(index, int) or index not in by_schedule_index for index in indexes):
+                raise ValueError("Execution plan pair references an unknown entry")
+            if any(index in referenced_indexes for index in indexes):
+                raise ValueError("Execution plan entry belongs to multiple pairs")
+            referenced_indexes.update(indexes)
+            pairs.append([by_schedule_index[index] for index in indexes])
+        if set(by_schedule_index) != referenced_indexes:
+            raise ValueError("Execution plan pair coverage is incomplete")
+        return pairs
+
+    # 历史串行计划没有 Pair 字段；按原有条目顺序恢复同一逻辑单元，不改写旧 Artifact。
+    grouped: dict[tuple[object, object, object], list[dict]] = {}
+    for entry in entries:
+        grouped.setdefault((entry.get("case_id"), entry.get("trial_index"), entry.get("job_id")), []).append(entry)
+    if not grouped:
+        raise ValueError("Execution plan has no pairs")
+    return list(grouped.values())
+
+
 def _run_execution_plan(
     execution_plan: dict,
     *,
@@ -330,7 +397,7 @@ def _run_execution_plan(
     adapter_capabilities: dict[str, object] | None,
     use_docker: bool,
 ) -> int:
-    """按冻结顺序执行所有 Trial，返回首个基础设施级失败码。"""
+    """按冻结 Pair 计划执行 Trial，返回首个基础设施级失败码。"""
 
     agents_by_label = {agent["id"]: agent for agent in agents}
     expected_source_by_label = {
@@ -344,8 +411,8 @@ def _run_execution_plan(
         if isinstance(item, dict) and isinstance(item.get("runtime_environment"), dict)
     }
     uses_external_command = external_command is not None or external_arm_configs is not None
-    # 只能消费已落盘的计划条目；Resume 不能依据当前输入重新推导或调整 Trial 顺序。
-    for entry in execution_plan["entries"]:
+
+    def run_entry(entry: dict) -> int:
         agent_label = entry["agent_label"]
         agent = agents_by_label[agent_label]
         manifest_path, manifest = manifests_by_id[entry["case_id"]]
@@ -400,8 +467,30 @@ def _run_execution_plan(
             print(completed.stdout)
         if completed.stderr:
             print(completed.stderr, file=sys.stderr)
-        if completed.returncode not in {0, 1}:
-            return completed.returncode
+        return completed.returncode
+
+    try:
+        pairs = _execution_pairs(execution_plan)
+    except ValueError:
+        return 2
+    concurrency = execution_plan.get("concurrency", 1)
+    if concurrency not in {1, 2}:
+        return 2
+
+    def run_pair(pair: list[dict]) -> int:
+        # Pair 内固定 baseline → candidate 并等待前一版本结束，避免共享时间窗口破坏配对语义。
+        for entry in pair:
+            returncode = run_entry(entry)
+            if returncode not in {0, 1}:
+                return returncode
+        return 0
+
+    # 只并发独立 Pair。一个 Pair 的基础设施失败只影响自身，其余 Pair 继续留下可审计证据。
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="pair") as pool:
+        returncodes = list(pool.map(run_pair, pairs))
+    for returncode in returncodes:
+        if returncode not in {0, 1}:
+            return returncode
     return 0
 
 
@@ -571,6 +660,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--schedule-seed", type=int, default=DEFAULT_SCHEDULE_SEED,
                         help="seed for the persisted paired, interleaved execution plan")
+    parser.add_argument("--concurrency", type=int, choices=(1, 2), default=1,
+                        help="maximum concurrent Case/repeat Pairs; versions inside a Pair stay serial")
     parser.add_argument("--comparison-intent", default="prompt_profile_only",
                         help="frozen description of the intervention under test")
     parser.add_argument("--allowed-difference", action="append", dest="allowed_differences",
@@ -729,6 +820,7 @@ def _freeze_or_restore_protocol(
         use_docker=use_docker,
         bash=args.bash,
         schedule_seed=args.schedule_seed,
+        concurrency=getattr(args, "concurrency", 1),
         comparison_intent=args.comparison_intent,
         allowed_differences=args.allowed_differences or ["agents[].prompt_profile"],
         prompt_profiles=prompt_profiles,
@@ -782,7 +874,9 @@ def _build_and_persist_execution_plan(
 ) -> dict | None:
     """构建配对执行计划，并拒绝改写已冻结的计划。"""
 
-    execution_plan = build_execution_plan(jobs, agents, seed=args.schedule_seed)
+    execution_plan = build_execution_plan(
+        jobs, agents, seed=args.schedule_seed, concurrency=getattr(args, "concurrency", 1),
+    )
     if args.report_only:
         return execution_plan
 

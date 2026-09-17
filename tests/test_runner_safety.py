@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from regression_lab.store import RunStore
-from scripts.run_benchmark import _timed_out_result
+from scripts.run_benchmark import _job_summary, _timed_out_result
 
 
 REGRESSION = Path(__file__).resolve().parents[1]
@@ -42,6 +42,21 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "timed_out")
         self.assertTrue(persisted["trace_id"].startswith("trace_parent_timeout_"))
         self.assertFalse(persisted["trace_validation"]["valid"])
+
+    def test_failed_job_summary_does_not_turn_missing_metrics_into_zero(self):
+        job = {"job_id": "case_trial_001", "case_id": "case", "trial_index": 1}
+        for status in ("timed_out", "agent_failed"):
+            summary = _job_summary(job, {
+                "status": status,
+                "evaluation": {"passed": False},
+                "scores": [],
+            })
+
+            self.assertIsNone(summary["duration_ms"])
+            self.assertIsNone(summary["tool_calls"])
+            self.assertIsNone(summary["model_tokens"])
+            self.assertIsNone(summary["added_lines"])
+            self.assertIsNone(summary["deleted_lines"])
 
     def test_runner_refuses_unowned_existing_job_directory(self):
         with TemporaryDirectory() as directory:

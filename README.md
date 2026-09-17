@@ -1,109 +1,178 @@
 # Regression Lab
 
-**Framework-neutral Agent regression evaluation and observability platform for reproducible version comparison.**
+**在发布 Coding Agent 新版本之前，用可复现的实验回答：它真的更好吗？**
 
-Regression Lab 不把一次 Agent 运行当成“任务成功/失败”的黑盒，而是把它变成一条可复查的工程证据链：同一 Case 上的 Baseline 与 Candidate 到底做了什么、为什么更好或更差、失败发生在哪个 Span，以及是否足以支持发布决策。
+Regression Lab 是一个本地优先、框架无关的 Agent 回归评测与可观测性平台。它在冻结的 Case 和执行协议下配对运行 Baseline 与 Candidate，把测试结果、Git Diff、层级 Trace、Token、延迟和工具调用汇成一条可复查的证据链，最终给出 `PROMOTE`、`HOLD` 或 `INCONCLUSIVE` Gate 结论。
 
-```mermaid
-flowchart TD
-    A[External Agent] --> B[Adapter Contract]
-    B --> C[Trial Runtime]
-    C --> D[Hierarchical Trace]
-    C --> E[Git / Test Evidence]
-    D --> F[Behavior Snapshot]
-    E --> F
-    F --> G[Baseline ↔ Candidate]
-    G --> H[Behavior Diff]
-    H --> I[Failure Attribution]
-    H --> J[Statistics]
-    I --> K[Promotion Gate]
-    J --> K
-    K --> L[Read-only Console]
-```
+[快速开始](#快速开始) · [接入自己的-agent](#接入自己的-agent) · [证据模型](#证据模型) · [架构](#工作原理) · [文档](#文档导航)
 
-## 它解决什么问题
+![Regression Lab Console：从发布 Gate 下钻到配对 Case 证据](assets/console-overview-v140.png)
 
-一个 Agent 版本“测试通过”还不足以证明它值得发布。工程决策通常还需要回答：
+## 为什么需要它
 
-- 两个版本是否在同一组可复现的 Case × Trial 条件下比较？
-- Candidate 的 Token、耗时或工具调用变化，来自什么可观察的行为变化？
-- 一个失败能否回到具体的 Trace Span、工具调用、测试或 Git Evidence？
-- 缺少证据时，系统会不会把 unknown 伪装成 `0`？
-- 通过率不变、但成本明显退化时，Gate 会不会阻止晋级？
+Agent 的一次“任务完成”不能证明新版本值得发布。真实的回归判断还需要回答：
 
-Regression Lab 将这些问题统一在一次版本实验中，而不是依赖人工读日志或单一平均分。
+- 两个版本是否使用同一 Case、Fixture、重复序号和评测口径？
+- 正确率相同的时候，Candidate 是否更慢、更贵或调用了更多工具？
+- 失败最早发生在哪个 workflow、模型或工具 Span？
+- Token、Tool Trace 等指标来自平台、框架回调还是 Agent 自报？
+- 当证据缺失时，系统是否明确显示 `N/A`，而不是用 `0` 掩盖未知？
 
-## 核心链路
+Regression Lab 将这些问题放进同一份冻结实验，而不是依赖人工拼接日志和平均值。
 
-| 层次 | 职责 | 关键输出 |
-|---|---|---|
-| External Agent | 任意可信本地 Coding Agent | 通过 JSON argv 启动，不绑定框架 |
-| Adapter Contract | 隔离平台与 Agent 的职责 | Trial 身份、受控输出、Capability Snapshot |
-| Trial Runtime | Attempt 独立临时 Git 工作目录、测试、Git Evidence、预算 | 不可变 Attempt 与选中的 Trial 投影 |
-| Hierarchical Trace | 记录通用 agent/workflow/llm/tool Span | JSONL Trace，保留父子关系 |
-| Behavior Snapshot | 从 Trace/Result 提取可量化行为 | Tool、Token、延迟、重复读取、重试等 |
-| Behavior Diff | 配对 Baseline/Candidate Trial | Delta、语义模式、Case 聚合 |
-| Failure Attribution | 基于确定性证据定位失败 | kind、reason、failure Span、evidence |
-| Promotion Gate | 独立于诊断层的发布判断 | `PROMOTE` / `HOLD` / 不可用原因 |
-| Console | 只读查看实验、Case、Trial 与 Trace | 从版本差异 drill down 到原始证据 |
+## 核心能力
 
-## 为什么不是“另一个 Agent 框架”
+| 能力 | 你得到什么 |
+|---|---|
+| 配对版本实验 | 同一 `Case × repeat` 内严格按 Baseline → Candidate 执行 |
+| 冻结执行协议 | 固定源码身份、Case、Fixture、模型配置、超时、Pair 顺序和并发度 |
+| 层级 Trace | 展开 `agent → workflow → model/tool`，查看耗时、状态与调用关系 |
+| 同步 Trace Diff | 三列对齐 Baseline / Delta / Candidate，定位首个行为分叉和关键路径 |
+| Failure Attribution | 用确定性证据区分 Agent、模型、Trace、测试和策略失败 |
+| Promotion Gate | 同时评估正确性、统计覆盖、成本预算和证据来源 |
+| Artifact Verify | 离线校验 Protocol、Execution Plan、Attempt、Trace、源码与环境身份 |
+| Pair 级并发 | 最多并行两个独立 Pair；同一 Pair 的两个版本仍保持串行 |
 
-Regression Lab 不负责规划、记忆、工具编排或替代 Agent Runtime。它只要求外部 Agent 通过 Observer SDK 输出通用 Trace，并由平台独立完成测试、Git Diff、Evaluator 和 Gate。
+## 快速开始
 
-因此同一条链路可接入：
-
-- 内置的最小 `react-agent`；
-- 任意满足 JSONL Observer Contract 的 `external-command` Agent；
-- 真实 [LangGraph 集成示例](docs/LANGGRAPH_INTEGRATION.md)，无需新增 LangGraph Adapter 或框架专属核心分支。
-
-## 已验证的证据
-
-正式外部 Agent Benchmark 使用 **11 Case × 3 Trial × 2 Version = 66 个选中 Trial**：
-
-| 对比 | 有效通过 | 关键行为变化 | Gate |
-|---|---:|---|---|
-| external-openai-v3 → external-openai-v4.1 | 33/33 → 33/33 | 平均少 11,660 Token（-66.3%）、少 2.82 次工具调用、少 11.21 秒 | `PROMOTE` |
-| external-openai-v3 → external-openai-v3-negative | 33/33 → 33/33 | 两次受控的终止后冗余模型调用，平均 Token +49.9% | `HOLD` |
-
-这两组实验同时证明：平台既能把效率改善追溯到行为差异，也能在正确率不变时拦截成本退化。详见 [V3→V4.1 正向报告](docs/EXPERIMENT_REPORT_EXTERNAL_V3_V4_1_BENCHMARK_V2.md) 与 [V3→V3-negative 负向对照](docs/EXPERIMENT_REPORT_EXTERNAL_V3_NEGATIVE_CONTROL_BENCHMARK_V2.md)。
-
-## 一键启动
-
-普通使用者不需要克隆仓库、创建虚拟环境或编写 YAML。macOS/Linux 上安装 [uv](https://docs.astral.sh/uv/) 后直接运行：
+需要 Python 3.11+、Git 和 [uv](https://docs.astral.sh/uv/)。无需克隆仓库，也无需手写 YAML：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3" regression-lab start
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.4.0" \
+  regression-lab start
 ```
 
-命令会启动并打开本机 Studio。它只监听 `127.0.0.1`；运行记录和 Studio 自动生成的 AgentSpec 默认保存到 `~/.regression-lab/`，不会写入安装目录。第一次只想确认环境可运行时：
+Studio 会在本机打开并引导你完成：
+
+1. 选择同一 Git 仓库的历史 commit/tag 与当前工作区，或填写两个独立 Agent；
+2. 指定两个版本各自的 Python 与启动入口；
+3. 选择 Benchmark Case、重复次数、运行边界和观测方式；
+4. Preflight 确认源码身份和理论硬截止后启动实验；
+5. 在 Console 中从 Gate 下钻到 Case、Trial、Trace 和 Git Diff。
+
+先验证安装和资源是否完整：
 
 ```bash
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3" regression-lab doctor
-uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3" regression-lab demo
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.4.0" \
+  regression-lab doctor
 ```
 
-`demo` 是完全离线、只读的公开演示，不调用模型、不执行外部 Agent。需要长期安装则使用：
+只想浏览界面和证据链，可打开完全离线的只读 Demo。它不执行 Agent，也不调用模型：
 
 ```bash
-uv tool install "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.3.3"
+uvx --from "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.4.0" \
+  regression-lab demo
+```
+
+长期使用可以安装 CLI：
+
+```bash
+uv tool install \
+  "git+https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git@v1.4.0"
+
 regression-lab start
 ```
 
-Studio 中选择 Quick setup，填写两个 Agent 的 Python 路径与入口、选择 Case，即可开始实验。Docker 是默认隔离方式；未安装 Docker 时，必须在页面明确确认“可信主机”才能运行本地 Agent。
+## 接入自己的 Agent
 
-### 比较同一个 Agent 仓库的两个状态
+平台不接管 Agent 的规划、记忆或工具系统。它以 `shell=false` 启动显式 argv，并提供三种观测层级：
 
-真实开发通常只有一个 Agent 仓库。Quick setup 默认选择 **Same Git repository**：填写仓库根目录、Baseline 的 commit/tag，并选择 Candidate 为另一个 commit/tag 或当前未提交工作区。平台会在系统临时目录创建两个源码快照后再运行实验，不会对你的仓库执行 checkout、stash、commit 或写入。
+| 模式 | Agent 改动 | 可获得的证据 |
+|---|---|---|
+| Black-box | 无需 import 平台代码 | 进程生命周期、测试、Git Diff；模型和工具指标为 `N/A` |
+| LangGraph callback | 在 `invoke/stream` 入口注入一次 Callback | workflow、model、tool Span 与框架观测到的用量 |
+| Native SDK | 用 Observer SDK 包裹关键调用 | Agent 主动上报的模型、工具和自定义 Span |
 
-Candidate 工作区中的 tracked 修改和未跟踪文件会进入快照；被 `.gitignore` 排除的文件（例如常见的 `.env`、`.venv`）不会进入。依赖发生变化时，请分别填写两个已准备好的 Python interpreter；平台不会自动执行 `pip install` 或 `uv sync`。
+最常见的方式是直接在 Studio 选择 **Same Git repository**：
 
-## 五分钟看懂项目（贡献者）
+- Baseline 填历史 commit 或 tag；
+- Candidate 选择当前 working tree 或另一个 commit；
+- 两个版本依赖不同时，分别指定已经准备好的 Python interpreter；
+- LangGraph Agent 选择 `LangGraph · framework callback`；其他 Agent 可以先从 Black-box 开始。
 
-源码贡献要求：Python 3.11、Git、Node.js；Docker Desktop 只用于容器隔离验收。核心验证和离线 Demo 不调用模型。
+平台会在系统临时目录中创建源码快照，不会对原仓库执行 checkout、stash 或 commit。Candidate 的 tracked 修改和未跟踪文件会进入快照；`.gitignore` 排除的 `.env`、`.venv` 等文件不会进入。
+
+详细步骤见 [使用自己的 Agent](docs/USING_YOUR_AGENT.md)，LangGraph 接入见 [LangGraph Integration](docs/LANGGRAPH_INTEGRATION.md)，底层 argv、环境和输出约束见 [External Agent Integration Contract](docs/EXTERNAL_AGENT_INTEGRATION_CONTRACT.md)。
+
+## 从结论回到证据
+
+Console 的阅读路径刻意保持从结论到原始证据：
+
+```text
+Promotion Gate
+  └─ Version summary / statistical coverage
+      └─ Case comparison
+          └─ Paired Trial
+              ├─ Synchronized Trace Diff
+              ├─ Failure Attribution
+              ├─ Hierarchical Trace
+              └─ Git Diff / stdout / stderr
+```
+
+正式外部 Agent Benchmark 已覆盖 **11 Cases × 3 repeats × 2 versions = 66 Trials**：
+
+| 对比 | 有效通过 | 关键变化 | Gate |
+|---|---:|---|---|
+| external-openai-v3 → v4.1 | 33/33 → 33/33 | 平均 Token -66.3%，工具调用 -2.82，延迟 -11.21s | `PROMOTE` |
+| external-openai-v3 → negative control | 33/33 → 33/33 | 正确率不变，平均 Token +49.9% | `HOLD` |
+
+这两组对照说明 Gate 不只看通过率：效率改善可以回到行为证据，成本退化也会在正确率不变时被拦截。查看 [正向报告](docs/EXPERIMENT_REPORT_EXTERNAL_V3_V4_1_BENCHMARK_V2.md) 和 [负向对照](docs/EXPERIMENT_REPORT_EXTERNAL_V3_NEGATIVE_CONTROL_BENCHMARK_V2.md)。
+
+## 证据模型
+
+Regression Lab 将“观察到什么”和“谁提供了证据”分开记录：
+
+| 来源 | 语义 | 典型证据 |
+|---|---|---|
+| `platform_observed` | 平台独立观察 | 进程状态、测试结果、Git Diff、wall time |
+| `framework_observed` | 框架回调采集 | LangGraph workflow/model/tool Trace、Token |
+| `sdk_self_reported` | Agent 通过 SDK 自报 | Native SDK 模型用量和工具调用 |
+| `not_observed` | 本次没有可信观测 | 显示 `N/A`，不转换成零 |
+
+Model Usage 与 Tool Trace 分别校验来源和覆盖率；只有部分 Trial 有指标时，不会用局部平均值支持晋级。Behavior Diff 和 Failure Attribution 只负责诊断，不直接修改 Gate。
+
+Artifact Verify 用于证明 Runtime 中的文件仍与冻结摘要一致。它不是数字签名、可信时间戳或远程来源认证，也不能防止拥有本机全部权限的人同时重写 Artifact 和摘要。完整规则见 [Gate Policy](docs/GATE_POLICY.md) 与 [Experiment Protocol](docs/EXPERIMENT_PROTOCOL.md)。
+
+## 工作原理
+
+```mermaid
+flowchart LR
+    A[Baseline source] --> P[Frozen Protocol]
+    B[Candidate source] --> P
+    C[Cases & Fixtures] --> P
+    P --> R[Paired Trial Runtime]
+    R --> T[Trace / Test / Git Evidence]
+    T --> D[Behavior Diff & Attribution]
+    D --> S[Paired Statistics]
+    S --> G[Promotion Gate]
+    G --> O[Read-only Console]
+```
+
+每个 Trial 都有独立的 Fixture、Workspace、Attempt、Trace、stdout/stderr 和 Result。开启 `concurrency=2` 时，并发单位是 `Case × repeat` 的 Pair；不同 Pair 可以重叠，同一 Pair 内始终保持 Baseline → Candidate，因此原有配对键和统计语义不变。
+
+完整 Runtime 可以离线验证，不会重新执行 Agent 或调用模型：
 
 ```bash
-cd <repository-root>
+regression-lab experiment verify --runtime <experiment-runtime-directory>
+```
+
+## 本地边界与安全
+
+- Studio 和 Console 仅监听 `127.0.0.1`，Artifact 默认保存在 `~/.regression-lab/`。
+- 项目面向本地、单机、受信任 Agent；不是多租户 SaaS，也不是不可信代码沙箱。
+- Docker 是平台测试命令的默认隔离边界，不会自动把 Agent 进程变成容器沙箱。
+- Trusted host 只适用于你明确信任的本地命令，并要求在 Studio 中显式确认。
+- Agent 默认只继承运行所需变量、`AGENT_*` 和 OpenAI-compatible 模型配置，不会接收平台进程的全部环境变量。
+- Prompt、工具参数和工具输出正文默认不会写入公开展示证据。
+
+执行与进程生命周期保证见 [Execution Reliability Contract](docs/EXECUTION_RELIABILITY_CONTRACT.md)，安全模型和漏洞报告方式见 [SECURITY.md](SECURITY.md)。
+
+## 开发与验证
+
+```bash
+git clone https://github.com/Zsyyyyyyyy/agent-observability-and-evaluation-platform.git
+cd agent-observability-and-evaluation-platform
+
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -112,174 +181,43 @@ make verify
 make offline-demo
 ```
 
-打开 `http://127.0.0.1:8765`。默认脱敏 Demo 包含 11 个 Case、66 个选中 Trial、完整的模型/工具父子 Span 和 `PROMOTE` Gate，不依赖 Agent 项目或模型服务。它适合沿着 Gate → Comparison → Failure Attribution → Trace Tree 查看完整技术主线。
-
-在页面中按下面的顺序查看技术主线：
-
-1. `Experiment Gate`：候选版本是否满足发布规则；
-2. `Case comparison`：同一 Case、同一重复序号的 Baseline/Candidate；
-3. `Failure Attribution`：失败属于模型、Agent、Trace、测试还是策略；
-4. `Trace structure → Tree`：按 `parent_span_id` 展开 Span；
-5. `Git diff`：平台独立采集的最终修改证据。
-
-`make verify` 会运行完整离线测试套件、所有 Benchmark Manifest 校验、Python 编译检查、前端语法检查、两个离线 Demo 的文件摘要检查和 Git 差异检查。Docker 可用时再运行：
+`make verify` 运行完整离线单元测试、Benchmark Manifest 校验、Python 编译、前端语法检查、两个 Demo 的摘要验证和 Git diff 检查，不需要模型密钥。Docker 可用时还可以运行：
 
 ```bash
 make docker-test
 make failure-suite
 ```
 
-### 查看任意已有实验
-
-Console 只读取本机已有的 Experiment Artifact；`.runtime/` 默认不纳入 Git，因此克隆仓库后需先自行运行或恢复一个实验目录。
-
-```bash
-make console RUNTIME=<experiment-runtime-directory>
-```
-
-打开 `http://127.0.0.1:8765`。如果默认端口已被占用，可指定 `CONSOLE_PORT=8767`；Console 不执行 Agent、不调用模型、不会写入 Artifact 或暴露密钥。界面说明见 [Web Console](docs/WEB_CONSOLE.md)。
-
-发布可直接打开的只读 Demo 时，不要提交完整 `.runtime/`；使用 [Public Demo Assets](docs/PUBLIC_DEMO_ASSETS.md) 导出脱敏、可校验的 `PROMOTE` 与 `HOLD` 包。
-
-发布结论或演示前，可离线验证整条证据链。该命令会检查 Protocol 指纹、冻结执行计划、选中 Attempt 的内容摘要、Trial 投影、Trace 校验状态、Agent 源码身份以及 Gate 与 Experiment 的关联，不执行 Agent，也不调用模型：
-
-```bash
-make verify-runtime RUNTIME=<experiment-runtime-directory>
-```
-
-仓库内置 Demo 是移除了 Attempt/Worktree 的公开只读导出包，因此使用独立的 `demo-manifest.json` 文件摘要校验；完整 Runtime 才使用上述 Experiment Artifact Verify。
-
-另一个离线包来自本机现有的 LangGraph v1/v2 黑盒实验，专门展示当前两个外部 Agent 的接入结果：
-
-```bash
-make offline-demo DEMO_RUNTIME=demo/standalone-langgraph-v1-v2 CONSOLE_PORT=8766
-```
-
-它包含 1 个 Case、3 次配对重复、6 个选中 Trial 和 `HOLD` Gate，其中 Baseline 有 2 次、Candidate 有 1 次确定性任务失败，均归因为 `agent / task_test_failed_or_not_run`。黑盒模式只能展示进程生命周期 Trace；这是观测能力边界，不会伪造模型或工具 Span。
-
-## 使用现有 LangGraph v1/v2 做真实验收
-
-启动 Studio：
-
-```bash
-make studio
-```
-
-打开 `http://127.0.0.1:8764`，选择 `Quick setup`，无需编写 YAML。对本机已有的两个版本填写：
-
-| 字段 | Baseline | Candidate |
-|---|---|---|
-| Project | `standalone-langgraph` | 相同 |
-| Agent | `standalone-langgraph-agent` | 相同 |
-| Version | `v1` | `v2` |
-| Launch target | Installed Python module | Installed Python module |
-| Python | `<v1-root>/.venv/bin/python` | `<v2-root>/.venv/bin/python` |
-| Module | `standalone_langgraph_agent` | `standalone_langgraph_agent` |
-| Observation | Black-box | Black-box |
-
-两个 Agent 都按 `--workspace <worktree> --task <task>` 启动。点击 `Save setup` 后，路径和版本只保存在当前浏览器；下次打开 Studio 会自动恢复。可信主机确认不会被保存，启动真实 Agent 前仍需再次确认。
-
-建议先选择一个 Case、一次重复做接入验收；确认源码身份、Trace 和测试证据正常后，再运行三次重复。真实模型调用是可选验收，不属于 `make verify` 或离线 Demo。
-
-## 三分钟验证 Black-box 接入
-
-下面的最小 Agent 只接收通用的 `--workspace` 和 `--task` 参数，不 import Regression Lab、不读取 `REGRESSION_*` 环境变量，也不需要模型配置。它用于验证本机安装、临时 Git 工作目录、Git/Test Evidence 和平台生命周期 Trace。
-
-```bash
-cat > blackbox-smoke.yaml <<EOF
-schema_version: 1
-agent:
-  id: blackbox-smoke-agent
-  version: v1
-runtime:
-  command:
-    - "$(command -v python)"
-    - "$(pwd)/examples/external_blackbox_agent.py"
-    - --workspace
-    - "{workspace}"
-    - --task
-    - "{task}"
-observation:
-  mode: blackbox
-EOF
-
-regression-lab --help
-regression-lab agent validate blackbox-smoke.yaml
-regression-lab agent smoke blackbox-smoke.yaml --unsafe-trusted-host
-```
-
-Smoke 成功后会打印 Runtime；可按输出中的命令启动 Console。Black-box 只提供 Agent 进程生命周期、Git 与平台测试证据，因此模型调用、Token、工具调用和 workflow Trace 会明确显示为 `N/A`，不会补成 `0`。
-
-## 接入一个外部 Agent
-
-平台以 `shell=false` 执行显式 JSON argv。Black-box Agent 只需接收 `--workspace {workspace}` 与 `--task {task}`；LangGraph Agent 只需在 `invoke/stream` 入口注入一次 Callback；自研 Runtime 才使用 Native SDK。平台始终独立采集测试、Diff 和评分结论，并在 Artifact 中标记证据来源。
-
-```python
-from regression_lab.sdk import AgentObserver
-
-observer = AgentObserver.from_environment()
-with observer.run():
-    with observer.model_call(model="your-model") as call:
-        call.record_usage({"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150})
-    with observer.tool_call("edit_file"):
-        ...
-
-AgentObserver.write_agent_output("done", "completed")
-```
-
-完整环境变量、事件字段和受控输出约束见 [External Agent Integration Contract](docs/EXTERNAL_AGENT_INTEGRATION_CONTRACT.md)。无模型最小示例可运行：
-
-```bash
-PYTHONPATH=src:. python3.11 scripts/run_benchmark.py \
-  --adapter external-command \
-  --agent-version external-example-v1 \
-  --external-command '["python3.11", "examples/external_python_agent.py"]' \
-  --manifest benchmarks/smoke-case-design.yaml \
-  --output-dir .runtime/external-example \
-  --unsafe-trusted-host
-```
-
-要评测自己的项目，请准备基线 Fixture、Case Manifest 和两个 Agent 版本，按 [Using Your Agent](docs/USING_YOUR_AGENT.md) 执行。平台会为每个 Attempt 复制 Fixture、初始化独立临时 Git 仓库并在其中运行 Trial，不会修改用户原始项目。主执行链没有调用 `git worktree add`，面试或文档中不应把它描述成 Git Worktree 隔离。
-
-## v1.3 工程边界
-
-当前 v1.3 系列定位是“可公开演示、可离线验证、可安全接入外部 Agent 的本地评测平台”。在此前版本基础上，进一步稳定实现：
-
-- 无 YAML 的 Studio 双版本实验；
-- Trace 树、Comparison、Failure Attribution 和 Gate；
-- 不可变 Attempt 与 Experiment Artifact Verify；
-- 默认最小外部 Agent 环境；
-- 可校验的离线 Demo。
-- Runtime Environment Identity、证据来源策略与 LangGraph Trace Conformance。
-- 同步双列 Trace Diff、首个结构分叉、关键路径和失败 Span 对齐。
-- Studio 取消、原 Runtime 恢复，以及 Studio 重启后的已取消实验发现。
-
-其中 Capability 明确区分 `available`、`supported_but_not_observed` 和 `unsupported`；未支持或未观测到的证据不会显示为 `0`。Behavior Diff 与 Failure Attribution 都是 diagnostic，不直接改变 Gate。v1.0 契约冻结仍是未来目标，不把当前项目过度描述为生产级平台。
-
-面试或代码评审时，可按 [架构讲解：从一次 Agent 运行到发布结论](docs/ARCHITECTURE_WALKTHROUGH.md) 理解 Protocol、Attempt、Trace、Evaluator、Gate 与 Artifact Verify 之间的设计边界。
+CI 对每次 push 和 pull request 执行同一套离线验证、Docker Sandbox 集成测试和 Failure Suite。贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 项目结构
 
 ```text
-adapters/       Agent 适配 Worker（包含通用 external-command）
-benchmarks/     版本实验使用的确定性 Case Manifest
-fixtures/       有缺陷的最小代码任务与测试
-src/            Trace、Evaluator、Experiment、Gate、Console 读取层
-scripts/        Benchmark、Experiment、报告与 Console CLI
-examples/       外部 Agent 与 LangGraph 集成示例
-tests/          离线单元测试与 Docker 集成测试
-docs/           契约、实验报告、冻结边界与路线图
+adapters/       外部 Agent 与只读回放适配器
+benchmarks/     可版本化的 Case Manifest
+fixtures/       隔离运行的最小代码任务与测试
+src/            Trace、Evaluator、Gate、Artifact 与 Console 核心
+scripts/        CLI、实验执行、验证与本地服务入口
+web/            Studio 和只读 Console 前端
+demo/           脱敏且可校验的离线 Runtime
+tests/          离线测试与 Docker 集成测试
+docs/           协议、契约、实验报告和路线图
 ```
 
-## 当前范围与非目标
+## 文档导航
 
-- 本项目是本地、单机、受信任 Agent 的评测与观测平台；不是多租户 SaaS，也不提供远程 Artifact 服务。
-- `external-command` 只运行用户明确配置的可信本地命令；它不是不可信代码沙箱。
-- 外部 Agent 默认只继承运行基础变量、`AGENT_*` 和 OpenAI-compatible 模型配置；平台进程中的其他环境变量不会全量传入。需要特殊环境的 Agent 应由自己的可信入口加载专用配置。Docker 默认只隔离平台测试命令，不会把 Agent 进程自动变成容器沙箱。
-- 不做 LLM 自动根因分析，不让诊断指标参与 Gate，也不在核心中加入 LangGraph、MCP 或 Multi-Agent 特判。
+| 你想了解 | 文档 |
+|---|---|
+| 如何评测自己的 Agent | [Using Your Agent](docs/USING_YOUR_AGENT.md) |
+| 实验中冻结了什么 | [Experiment Protocol](docs/EXPERIMENT_PROTOCOL.md) |
+| Trace 的事件和父子关系 | [Trace Schema](docs/TRACE_SCHEMA.md) |
+| Gate 如何处理正确性、成本和证据来源 | [Gate Policy](docs/GATE_POLICY.md) |
+| Attempt 选择和恢复语义 | [Attempt Selection Contract](docs/ATTEMPT_SELECTION_CONTRACT.md) · [Resume](docs/RESUME.md) |
+| 从运行到发布结论的完整架构 | [Architecture Walkthrough](docs/ARCHITECTURE_WALKTHROUGH.md) |
+| 当前能力边界与后续方向 | [Roadmap](docs/ROADMAP.md) |
 
-贡献流程与契约变更要求见 [CONTRIBUTING.md](CONTRIBUTING.md)，执行边界与漏洞报告方式见 [SECURITY.md](SECURITY.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+## 当前定位
 
-## CI
+v1.4 是一个可公开演示、可离线验证、可安全接入可信本地 Agent 的版本回归平台。它已经覆盖双版本实验、Pair 并发、Trace Diff、Failure Attribution、Gate 和 Artifact Verify，但不宣称是生产级多租户平台，也不提供远程 Artifact 服务或 LLM 自动根因分析。
 
-每次 push 与 pull request 都使用 Python 3.11 执行 `make verify`、Docker Sandbox 集成测试与 Failure Suite；不需要模型密钥，也不会调用真实模型。工作流定义见 [verify.yml](.github/workflows/verify.yml)。
+版本变化见 [CHANGELOG.md](CHANGELOG.md)。本项目采用 [MIT License](LICENSE)。

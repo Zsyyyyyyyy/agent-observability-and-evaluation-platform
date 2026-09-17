@@ -302,6 +302,30 @@ def verify_experiment_runtime(runtime: str | Path) -> dict[str, Any]:
             _issue(issues, "execution_plan_projection_mismatch", root / "execution-plan.json", root,
                    "planned Jobs and Experiment summary Jobs differ")
 
+        protocol_execution = protocol.get("execution") if isinstance(protocol.get("execution"), dict) else {}
+        plan_concurrency = plan.get("concurrency", 1)
+        protocol_concurrency = protocol_execution.get("concurrency", 1)
+        if plan_concurrency not in {1, 2} or plan_concurrency != protocol_concurrency:
+            _issue(issues, "execution_plan_concurrency_mismatch", root / "execution-plan.json", root,
+                   "execution plan concurrency does not match the frozen Protocol")
+        pairs = plan.get("pairs")
+        if pairs is not None:
+            expected_pairs = {
+                str(entry.get("pair_id")): []
+                for entry in entries
+                if isinstance(entry, dict) and isinstance(entry.get("pair_id"), str)
+            }
+            for entry in entries:
+                if isinstance(entry, dict) and isinstance(entry.get("pair_id"), str):
+                    expected_pairs[str(entry["pair_id"])].append(entry.get("schedule_index"))
+            persisted_pairs = {
+                str(pair.get("pair_id")): pair.get("entry_schedule_indices")
+                for pair in pairs if isinstance(pair, dict) and isinstance(pair.get("pair_id"), str)
+            } if isinstance(pairs, list) else {}
+            if expected_pairs != persisted_pairs:
+                _issue(issues, "execution_plan_pair_projection_mismatch", root / "execution-plan.json", root,
+                       "Pair identities do not cover exactly the frozen execution entries")
+
     gate_path = root / "gate-report.json"
     if gate_path.is_file():
         gate = _read_object(gate_path, issues, root)

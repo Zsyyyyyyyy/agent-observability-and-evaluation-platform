@@ -254,13 +254,14 @@ class BudgetEvaluator:
              and event.get("span_id") in root_ids and "duration_ms" in _event_attributes(event)),
             None,
         )
-        duration_ms = _event_attributes(root_end).get("duration_ms", 0) if root_end else 0
+        # 根 Span 未闭合时没有可信的端到端耗时；不能把缺失证据写成 0ms。
+        duration_ms = _event_attributes(root_end).get("duration_ms") if root_end else None
         max_tool_calls = int(budget.get("max_tool_calls", 20))
         max_duration_ms = float(budget.get("max_duration_ms", 180000))
         violations = []
         if tool_calls > max_tool_calls:
             violations.append("tool_calls")
-        if duration_ms > max_duration_ms:
+        if isinstance(duration_ms, (int, float)) and duration_ms > max_duration_ms:
             violations.append("duration_ms")
         actual = {"tool_calls": tool_calls, "duration_ms": duration_ms, "violations": violations}
         return Score(

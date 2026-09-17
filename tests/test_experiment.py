@@ -69,6 +69,20 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(comparison["delta"]["model_failed_rate"], 1.0)
         self.assertIn("model_failed_rate", comparison["classification"]["regressed"])
 
+    def test_comparison_keeps_missing_failed_trial_metrics_unavailable(self):
+        failed = {"jobs": [
+            {"status": "timed_out", "evaluation_passed": False},
+            {"status": "agent_failed", "evaluation_passed": False},
+        ]}
+
+        comparison = compare_summaries(failed, failed)
+
+        self.assertIsNone(comparison["baseline"]["avg_duration_ms"])
+        self.assertIsNone(comparison["baseline"]["avg_model_tokens"])
+        self.assertIsNone(comparison["baseline"]["avg_tool_calls"])
+        self.assertIsNone(comparison["baseline"]["avg_added_lines"])
+        self.assertIsNone(comparison["baseline"]["avg_deleted_lines"])
+
     def test_empty_diff_from_external_failure_is_not_a_diff_policy_violation(self):
         baseline = {"jobs": [{"status": "completed", "evaluation_passed": True, "diff_policy_violated": False}]}
         candidate = {"jobs": [{"status": "model_failed", "evaluation_passed": False, "diff_policy_violated": False}]}
@@ -153,6 +167,36 @@ class ExperimentTests(unittest.TestCase):
             (trial_dir / "result.json").write_text(json.dumps({"trace_path": str(trace)}), encoding="utf-8")
             hydrated = _hydrate_trial_diagnostics({"jobs": [{"job_id": "case_trial_001"}]}, case_dir)
         self.assertIsNone(hydrated["jobs"][0]["behavior"]["tool_success_rate"])
+
+    def test_report_only_restores_historical_missing_metrics_from_attempt(self):
+        with TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            trial_dir = case_dir / "case_trial_001"
+            trial_dir.mkdir()
+            (trial_dir / "result.json").write_text(json.dumps({
+                "status": "timed_out",
+                "model_usage": {},
+                "scores": [
+                    {"evaluator": "budget", "actual": {"duration_ms": 0}},
+                    {"evaluator": "tool_integrity", "actual": {"tool_calls": 0}},
+                ],
+            }), encoding="utf-8")
+
+            hydrated = _hydrate_trial_diagnostics({"jobs": [{
+                "job_id": "case_trial_001",
+                "duration_ms": 0,
+                "model_tokens": 0,
+                "tool_calls": 0,
+                "added_lines": 0,
+                "deleted_lines": 0,
+            }]}, case_dir)
+
+        job = hydrated["jobs"][0]
+        self.assertIsNone(job["duration_ms"])
+        self.assertIsNone(job["model_tokens"])
+        self.assertEqual(job["tool_calls"], 0)
+        self.assertIsNone(job["added_lines"])
+        self.assertIsNone(job["deleted_lines"])
         self.assertEqual(hydrated["jobs"][0]["behavior"]["capability_source"], "historical_unknown")
         self.assertIsNone(hydrated["jobs"][0]["behavior_snapshot"]["tool_calls"])
 

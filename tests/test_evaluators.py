@@ -131,6 +131,18 @@ class EvaluatorTests(unittest.TestCase):
         self.assertFalse(evaluation["passed"])
         self.assertEqual(len(evaluation["scores"]), 6)
 
+    def test_budget_keeps_unclosed_root_duration_unavailable(self):
+        with TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "trace.jsonl"
+            trace_path.write_text(
+                '{"kind":"span_start","span_id":"root","name":"agent.run","attributes":{}}\n',
+                encoding="utf-8",
+            )
+
+            budget = BudgetEvaluator().evaluate({"trace_path": str(trace_path)})
+
+        self.assertIsNone(budget.actual["duration_ms"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,37 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(any("id must match" in error for error in validation.errors))
         self.assertTrue(any("fixture.path escapes project_root" in error for error in validation.errors))
 
+    def test_studio_presets_are_optional_but_must_be_ready_and_well_formed(self):
+        manifest = load_manifest(REGRESSION / "benchmarks" / "normalize-case-design.yaml")
+        manifest.pop("studio")
+        self.assertTrue(validate_manifest(manifest, REGRESSION).valid)
+
+        manifest["studio"] = {"presets": ["fast", "standard"]}
+        self.assertTrue(validate_manifest(manifest, REGRESSION).valid)
+
+        manifest["studio"] = {"presets": ["fast", "unknown"]}
+        self.assertIn("studio.presets must contain only fast or standard", validate_manifest(manifest, REGRESSION).errors)
+
+        manifest["studio"] = {"presets": ["fast", "fast"]}
+        self.assertIn("studio.presets must not contain duplicates", validate_manifest(manifest, REGRESSION).errors)
+
+        manifest["status"] = "draft"
+        manifest["studio"] = {"presets": ["fast"]}
+        self.assertIn("only ready Cases may declare studio.presets", validate_manifest(manifest, REGRESSION).errors)
+
+    def test_recommended_cases_keep_their_versioned_timeout_budget(self):
+        expected = {
+            "normalize-case-design.yaml": (2, 90),
+            "safe-slug-case.yaml": (3, 120),
+            "parse-port-case.yaml": (2, 120),
+        }
+
+        for filename, (version, timeout_seconds) in expected.items():
+            manifest = load_manifest(REGRESSION / "benchmarks" / filename)
+            self.assertTrue(validate_manifest(manifest, REGRESSION).valid)
+            self.assertEqual(manifest["version"], version)
+            self.assertEqual(manifest["execution"]["timeout_seconds"], timeout_seconds)
+
     def test_safe_child_rejects_symlink_escape(self):
         with TemporaryDirectory() as directory, TemporaryDirectory() as outside:
             root = Path(directory)
